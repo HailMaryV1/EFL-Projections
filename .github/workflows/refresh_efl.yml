@@ -1,0 +1,67 @@
+name: Refresh EFL Projections
+
+# Runs the whole real pipeline: apply any pending migrations, pull every
+# real data source (refresh_efl.py's 4 steps - all plain fantasy.efl.com
+# JSON, no browser automation needed, see CLAUDE.md's own pivot note),
+# then recompute both projection engines.
+#
+# Every 6 hours, same cadence as dreamteam-projections' own workflow -
+# real Fantasy EFL gameweeks span a full Thursday-Wednesday week (longer
+# than Dream Team's 2-4 real days), so this is arguably more frequent
+# than strictly necessary right now, but keeps real match results/events
+# from lagging noticeably during a live gameweek without hammering
+# fantasy.efl.com's own servers. Revisit if real usage ever justifies a
+# longer interval.
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # Python fully buffers stdout when it isn't attached to a real
+      # terminal - a long step can look stuck in the log viewer for many
+      # minutes while real work is happening. Same real fix
+      # dreamteam-projections' own workflow already needed.
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Apply migrations
+        run: python scripts/run_migration.py
+
+      # continue-on-error so a transient fantasy.efl.com hiccup in one
+      # step doesn't also block the compute steps below from running on
+      # whatever real data WAS already ingested - same real incident
+      # dreamteam-projections' own workflow documents hitting once
+      # (a single unresolved name exiting non-zero silently stalled the
+      # whole pipeline for ~24h). The check at the end still fails the
+      # job for real visibility, just after the parts that matter to the
+      # live site have already run.
+      - name: Data ingestion (teams, fixtures, player stats, club stats)
+        id: ingestion
+        continue-on-error: true
+        run: python scripts/refresh_efl.py
+
+      - name: Compute player projections
+        run: python scripts/compute_player_projections.py
+
+      - name: Compute club projections
+        run: python scripts/compute_club_projections.py
+
+      - name: Fail the run if data ingestion had a real problem
+        if: steps.ingestion.outcome == 'failure'
+        run: |
+          echo "Data ingestion reported a real failure above - both compute steps still ran on whatever data was ingested, but this needs a real look (see the ingestion step's own log)."
+          exit 1

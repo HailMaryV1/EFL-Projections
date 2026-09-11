@@ -131,8 +131,14 @@ to read this section alone and know what's real.
       Fixture Forecast with real win/draw/loss percentages), mobile
       layout checked on Projected Points (table -> card breakpoint, no
       horizontal overflow).
-- [ ] Phase 6 - deployment (GitHub Actions cron + Vercel, live at
-      `efl.hailmaryfantasysports.co.uk`).
+- [ ] Phase 6 - deployment. `.github/workflows/refresh_efl.yml` written
+      (6-hourly cron + `workflow_dispatch`, no Playwright install step
+      needed - every real source is plain `fantasy.efl.com` JSON). Admin
+      overview's "Recompute now" button wired to it
+      (`app/admin/RecomputeButton.tsx` + `triggerRecompute` in
+      `app/admin/actions.ts`), same pattern as dreamteam-projections.
+      **Not yet live** - needs the one-time human setup below, and hasn't
+      had a real end-to-end CI run yet.
 
 ## Why this is a separate project
 
@@ -239,6 +245,38 @@ docs/data-and-weights.md's "Known limitations"):
   create a real Supabase Auth user first: Supabase dashboard →
   Authentication → Users → Add User (your own email/password - never
   something to ask an AI assistant to type in for you).
-- Projection engine (run after ingestion, not part of `refresh_efl.py`):
-  `python scripts/compute_player_projections.py` and
-  `python scripts/compute_club_projections.py`.
+
+## Deployment setup (one-time, needs a human)
+
+Same two real steps as dreamteam-projections needed - neither is
+something an AI assistant should do on your behalf (a repo secret and a
+personal access token are both real credentials).
+
+1. **GitHub Actions secret** - `.github/workflows/refresh_efl.yml` needs a
+   `DATABASE_URL` repo secret before it can run: GitHub repo (`HailMaryV1/
+   EFL-Projections`) → Settings → Secrets and variables → Actions → "New
+   repository secret", name `DATABASE_URL`, value = the same real
+   connection string already in your local `.env`.
+2. **Recompute-now token** - the admin overview page's "Recompute now"
+   button calls GitHub's `workflow_dispatch` API directly, which needs a
+   real token with Actions write access on this repo: GitHub → Settings
+   (account, not repo) → Developer settings → Personal access tokens →
+   Fine-grained tokens → "Generate new token", scope it to just the
+   `EFL-Projections` repository, grant "Actions: Read and write"
+   repository permission, generate, copy the token (shown once). Add it
+   as `GITHUB_ACTIONS_TOKEN` in `frontend/.env.local` (local dev) and in
+   Vercel's project env vars (production) - never `NEXT_PUBLIC_`,
+   server-only.
+3. **Vercel project** - new project, import the `HailMaryV1/EFL-
+   Projections` GitHub repo, set **Root Directory** to `frontend` (the
+   Next.js app doesn't live at the repo root - the exact same setting
+   that broke once during hailmary-hub's own deployment when it was left
+   pointing at a stale value). Environment variables:
+   `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
+   `SUPABASE_SERVICE_ROLE_KEY`, `GITHUB_ACTIONS_TOKEN` (from step 2) -
+   same real values as `frontend/.env.local`. `SITE_PASSWORD` is optional
+   (Basic Auth in front of the whole site, a no-op if unset).
+4. **Domain** - add `efl.hailmaryfantasysports.co.uk` as a custom domain
+   on the new Vercel project, then add the DNS record Vercel shows you
+   wherever `hailmaryfantasysports.co.uk`'s other real subdomains
+   (`dreamteam.*`) are already managed.

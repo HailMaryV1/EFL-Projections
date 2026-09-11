@@ -1,4 +1,5 @@
 import { createServiceSupabaseClient } from "@/lib/supabaseServiceClient";
+import RecomputeButton from "./RecomputeButton";
 
 export default async function AdminOverviewPage() {
   const supabase = createServiceSupabaseClient();
@@ -30,12 +31,7 @@ export default async function AdminOverviewPage() {
         </p>
       )}
 
-      <p className="text-xs text-navy-500">
-        No &ldquo;Recompute now&rdquo; button yet - `.github/workflows/refresh_efl.yml` doesn&rsquo;t exist until Phase 6
-        (deployment). Run <code className="rounded bg-navy-900 px-1 py-0.5">python scripts/refresh_efl.py</code> then{" "}
-        <code className="rounded bg-navy-900 px-1 py-0.5">compute_player_projections.py</code>/
-        <code className="rounded bg-navy-900 px-1 py-0.5">compute_club_projections.py</code> locally for now.
-      </p>
+      <RecomputeButton />
 
       <section>
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-navy-300">Recent activity</h2>
