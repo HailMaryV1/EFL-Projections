@@ -67,9 +67,30 @@ to read this section alone and know what's real.
       starts empty by design, same as Dream Team). No Monte Carlo
       simulation in this v1 (deliberately cut from scope - see migration
       `0011`'s own comment).
-- [ ] Phase 4 - admin settings UI (Scoring Rules, Club Scoring Rules, Layer
-      Weights, Rating Anchors, Activity Log, Accuracy) - Accuracy admin-gated
-      from the start this time, not moved there later.
+- [x] Phase 4 - admin settings UI. `frontend/` scaffolded (Next.js 16 /
+      React 19 / Tailwind 4, same conventions as `dreamteam-projections/
+      frontend`) with Supabase-Auth-gated `/admin` (`proxy.ts` redirects an
+      unauthenticated visitor; `admin/layout.tsx` re-checks server-side).
+      Six real panels: Scoring Rules (+ the two tiered tables in a compact
+      section on the same page), Club Scoring Rules (new), Layer Weights,
+      Club Layer Weights (new, no position dimension), Rating Anchors
+      (with a real "recalibrate from today's real data" action - directly
+      portable from Dream Team's version since the schema matches
+      exactly), Activity Log. Every save writes `activity_log` and bumps
+      `algorithm_versions` (`lib/adminHelpers.ts`, adapted for this
+      project's own real tables). **Verified**: typecheck clean; `/admin`
+      confirmed redirecting to `/login` when signed out; every admin
+      table's real row counts confirmed directly against the database
+      (scoring_rules=23, club_scoring_rules=6, layer_weights=64,
+      club_layer_weights=16, appearance_points_tiers=3,
+      hat_trick_bonus_tiers=2, activity_log=72 real `team_added` events
+      from Phase 2). **Not yet verified signed-in** - needs a real
+      Supabase Auth user for this project (Authentication → Users → Add
+      User in the Supabase dashboard - the user's own account/password,
+      never entered by Claude). No "Accuracy" page yet -
+      `freeze_predictions.py`/`capture_actuals.py` (the scripts that would
+      populate real predictions_and_actuals rows to grade) haven't been
+      built - added once there's real captured data to show.
 - [ ] Phase 5 - public frontend (Projected Points, Fixture Forecast across 3
       divisions, XI Builder with 2 club picks and no budget, Club Picks, Top
       Picks, Compare, player pages) - reusing Hail Mary's existing navy/cyan
@@ -109,10 +130,10 @@ still apply - see each phase's own notes for what's ported vs. new.
 ## Directory layout
 
 ```
-scripts/            Python - data ingestion + (later) the projection engine
+scripts/            Python - data ingestion + the projection engine
 supabase/migrations/ Numbered SQL migrations, applied via scripts/run_migration.py
 docs/                data-and-weights.md - the living record of what feeds what
-frontend/            added in Phase 5
+frontend/            Next.js 16 / React 19 / Tailwind 4 - admin settings (Phase 4); public pages come in Phase 5
 .github/workflows/   added in Phase 6
 ```
 
@@ -174,6 +195,14 @@ docs/data-and-weights.md's "Known limitations"):
 - Full ingestion pipeline: `python scripts/refresh_efl.py` (runs
   `seed_teams -> scrape_fixtures -> scrape_player_stats -> scrape_club_stats`
   in that order - each step's failure is logged but doesn't block the rest).
+- Projection engine (run after ingestion, not part of `refresh_efl.py`):
+  `python scripts/compute_player_projections.py` and
+  `python scripts/compute_club_projections.py`.
+- Frontend: `cd frontend && npm run dev`, with `frontend/.env.local`
+  populated (see `frontend/.env.example`). To sign into `/admin` locally,
+  create a real Supabase Auth user first: Supabase dashboard →
+  Authentication → Users → Add User (your own email/password - never
+  something to ask an AI assistant to type in for you).
 - Projection engine (run after ingestion, not part of `refresh_efl.py`):
   `python scripts/compute_player_projections.py` and
   `python scripts/compute_club_projections.py`.

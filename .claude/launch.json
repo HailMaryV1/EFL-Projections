@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "efl-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:\\Users\\info\\OneDrive\\Documents\\OneDrive\\Desktop\\EFL-Projections\\frontend", "run", "dev", "--", "-p", "3011"],
+      "port": 3011
+    }
+  ]
+}
