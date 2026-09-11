@@ -23,32 +23,50 @@ to read this section alone and know what's real.
 - [x] Phase 1 - database schema (15 migrations - see
       `supabase/migrations/`). Applied cleanly to the real Supabase project
       via `python scripts/run_migration.py`.
-- [x] Phase 2 - data ingestion (free sources only). `scripts/refresh_efl.py`
-      runs `seed_teams.py -> scrape_fixtures.py -> scrape_player_stats.py ->
-      scrape_club_stats.py` end-to-end against DreamTeamTonic's real
-      `fefl/*` API (see docs/data-and-weights.md for exact endpoints).
-      **Verified against real data**: 72 real teams, 3570 real players,
-      1656 real fixtures (552 x 3 divisions, 0 unresolved team names),
-      21420 real `player_stats` rows and 432 real `club_stats` rows
-      (season aggregate + 5 played gameweeks so far). Spot-checked the top
-      5 season-aggregate players against DreamTeamTonic's own live tool
-      page - exact match (Jack Marriott 52pts, Jack Fitzwater 45pts, etc).
-      All four writes are batched with `psycopg2.extras.execute_values`
-      (one round trip per ~3570-row response, not one per row) - the
-      first, unbatched version of `scrape_player_stats.py` was genuinely
-      too slow against the real hosted Supabase connection (the same
-      per-row-query mistake dreamteam-projections documents hitting a
-      37-minute CI timeout over), caught and fixed before it ever
-      finished a real run, not after. Deliberately deferred, not silently
-      dropped: a Premium-login market-odds scraper (DreamTeamTonic's
-      `fantasy-efl/tools/market-odds` tool is Premium-gated, confirmed
-      live) - build once a real `DREAMTEAMTONIC_EMAIL`/
-      `DREAMTEAMTONIC_PASSWORD` exists to test against.
-- [ ] Phase 3 - projection engine (player projections + a new club-projections
-      engine). Not started - planned to reuse `compute_projections.py`'s
-      batch-loading/renormalization patterns, minus the Bonus-PPM and
-      cup-rotation machinery Fantasy EFL doesn't need (cup games don't score
-      at all in this game).
+- [x] Phase 2 - data ingestion. **Real mid-build pivot** (see
+      docs/data-and-weights.md's own "Real pivot" section for the full
+      story): first shipped against DreamTeamTonic's `fefl/*` API, verified
+      against real row counts - then, while building Phase 3, a direct
+      live check found every per-event stat field on that API (goals,
+      assists, tackles, etc.) was a genuine zero for all 3570 real
+      players, not a scraper bug. The whole pipeline was rebuilt around
+      `fantasy.efl.com`'s own real JSON instead (`json/fantasy/squads.json`
+      /`players.json`/`rounds.json`/`competitions.json`) - free,
+      unauthenticated, and genuinely real (spot-checked exact matches: Jack
+      Fitzwater real goals=2/clearances=77/blocks=10/tackles=10/
+      cleanSheets=2/totalPoints=55). `scripts/refresh_efl.py` runs
+      `seed_teams.py -> scrape_fixtures.py -> scrape_player_stats.py ->
+      scrape_club_stats.py` end-to-end. **Verified against real data**: 72
+      teams, 3570 players, 1656 fixtures (0 unresolved), real per-round
+      goal/assist/card/own-goal/missed-penalty rows derived from real
+      match events (`rounds.json`), real per-club win/draw/loss/goals
+      records derived from real match results. Every write batched with
+      `psycopg2.extras.execute_values` - an early unbatched version of
+      `scrape_player_stats.py` was already too slow against the real
+      hosted Supabase connection (the same per-row-query mistake
+      dreamteam-projections documents hitting a 37-minute CI timeout
+      over), caught and fixed before it ever finished a run. Deliberately
+      deferred, not silently dropped: a Premium-login market-odds scraper
+      (DreamTeamTonic's `fantasy-efl/tools/market-odds` tool is
+      Premium-gated, confirmed live) - build once a real
+      `DREAMTEAMTONIC_EMAIL`/`DREAMTEAMTONIC_PASSWORD` exists to test
+      against.
+- [x] Phase 3 - projection engine. `scripts/compute_player_projections.py`
+      (real per-fixture expected counts for every priced stat, summed
+      across a horizon, gated by Xmins, FDR-adjusted) and
+      `scripts/compute_club_projections.py` (real win/draw/away-win/
+      clean-sheet/2+/4+-goals expected counts via an independent-Poisson
+      scoreline model on each club's own real attack/defense strength).
+      **Verified against real data**: 14280 real player projections (3570
+      players x 4 horizons) and 288 real club projections (72 clubs x 4
+      horizons) written for the real current gameweek, real differentiated
+      per-stat breakdowns confirmed (e.g. a real forward's top contributors
+      were goal/shot_on_target/assist in sensible real proportions, not a
+      flat appearance-points-only number). `rating` stays `null` (Phase 4
+      hasn't built the anchor-calibration action yet - `rating_anchors`
+      starts empty by design, same as Dream Team). No Monte Carlo
+      simulation in this v1 (deliberately cut from scope - see migration
+      `0011`'s own comment).
 - [ ] Phase 4 - admin settings UI (Scoring Rules, Club Scoring Rules, Layer
       Weights, Rating Anchors, Activity Log, Accuracy) - Accuracy admin-gated
       from the start this time, not moved there later.
@@ -116,28 +134,35 @@ deliberately, not reinvented.)
   with `psycopg2` directly against `DATABASE_URL` - never through the
   Supabase REST/anon client (that's for the frontend only, once it exists).
 
-## Real data sources (Phase 2)
+## Real data sources
 
-All free, no login, on the same `dtt-data-api-259295136071.europe-west2.run.app`
-backend `dreamteam-projections`'s own scraper already talks to (different
-namespace - `fefl` here, `sdt` there):
+All free, unauthenticated, on `fantasy.efl.com`'s own static JSON - the
+official game's own data, not a third-party mirror (see Phase 2's own
+Status entry above for why this replaced an earlier DreamTeamTonic-based
+version mid-build).
 
-| Endpoint | Gives | Feeds |
+| Source | Gives | Feeds |
 |---|---|---|
-| `fefl/squads?season=202627&competition={championship\|league-one\|league-two}` | All 72 real clubs: `squadId`, `name`, `shortName`, `abbreviation`, official `fdrHome`/`fdrAway`, `leaguePosition`, badge/colours | `teams` |
-| `storage.googleapis.com/dttfixturelists/fefl-{championship\|league-one\|league-two}Fixtures.json` | Real fixtures per division: team names, real `gw`, `timestamp`, `score`, `status` - static JSON, no scraping needed | `fixtures` |
-| `fefl/overall-stats-by-gw?fromGW=N&toGW=N&season=202627` | Real per-gameweek (or season-aggregate) stats for all ~3570 players: identity, position, squad, goals/assists/keyPasses/shotsOnTarget/cleanSheets/clearances/blocks/tackles/interceptions/saves/goalsConceded, `percentSelected`, status/injury/suspension, DTT's own real `totalPoints` | `players`, `player_stats` |
-| `fefl/club-stats-by-gw?fromGW=N&toGW=N&season=202627` | Real per-club per-gameweek: cleanSheets, goalsScored/goalsConceded, twoGoalGames, real league table columns, DTT's own real club `totalPoints` | `club_stats` |
-| `fefl/current-gameweek?season=202627` | `{currentGameweek, totalGameweeks, totalGameweeksWithPlayoffs}` - one global number | gameweek resolution |
+| `fantasy.efl.com/json/fantasy/competitions.json` | Real competitionId -> division mapping (10/11/12) | Every script's competition resolution |
+| `fantasy.efl.com/json/fantasy/squads.json` | All 72 real clubs: `id`, `name`, `shortName`, `abbreviation`, official `fdrHome`/`fdrAway`, `leaguePosition`, badge/colours | `teams` |
+| `fantasy.efl.com/json/fantasy/rounds.json` | All 42 real gameweeks: real `games` (home/away, score, status) AND real per-game `events` (Goal/YellowCard/RedCard/OwnGoal/Penalty, with playerId/minute/assistPlayerId) | `fixtures`; real per-round `player_stats`/`club_stats` |
+| `fantasy.efl.com/json/fantasy/players.json` | Real season-aggregate stats for ~3570 players: identity, position, squad, real goalsScored/assists/keyPasses/shotsOnTarget/cleanSheets/clearances/blocks/tackles/interceptions/saves/appearances, `percentSelected`, status/injury/suspension, real `totalPoints` | `players`, season-aggregate `player_stats` |
 
-**Confirmed gaps** (documented, not silently worked around):
-- No raw per-match minutes field anywhere in the free data - only
-  `gamesPlayed`. Xmins will use a season-wide appearance-rate proxy
-  (`gamesPlayed / team_games_played`) until/unless a minutes source exists.
+**Confirmed gaps** (documented, not silently worked around - full detail in
+docs/data-and-weights.md's "Known limitations"):
+- No raw per-match minutes field - only `appearances`. Xmins uses a
+  season-wide appearance-rate proxy.
+- No real per-round "did this player play" flag - only real per-round
+  scoring/carded events. Form's exposure model adapts around this (see
+  docs/data-and-weights.md).
+- No real per-player goals-conceded or penalty-save attribution - priced
+  from team-level data / left unpriced respectively.
 - DreamTeamTonic's `fantasy-efl/tools/market-odds` tool (live win/draw/clean
   sheet bookmaker odds) is Premium-gated - confirmed by hitting a paywall
   redirect. The Live Odds layer stays unpopulated (renormalizes away, same
-  as any missing layer) until a real Premium login exists to scrape it.
+  as any missing layer) until a real Premium login exists to scrape it -
+  both Poisson-style models (player goal-scoring, club scorelines) run on
+  real historical goals + official FDR instead for now.
 
 ## Running locally
 
@@ -149,3 +174,6 @@ namespace - `fefl` here, `sdt` there):
 - Full ingestion pipeline: `python scripts/refresh_efl.py` (runs
   `seed_teams -> scrape_fixtures -> scrape_player_stats -> scrape_club_stats`
   in that order - each step's failure is logged but doesn't block the rest).
+- Projection engine (run after ingestion, not part of `refresh_efl.py`):
+  `python scripts/compute_player_projections.py` and
+  `python scripts/compute_club_projections.py`.
