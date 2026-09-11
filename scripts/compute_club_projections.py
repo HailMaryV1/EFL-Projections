@@ -249,6 +249,11 @@ def project_club_stats(team_id, fixtures, attack, defense, league_avg_goals, clu
     win_p_total = draw_p_total = away_win_p_total = cs_p_total = two_p_total = four_p_total = 0.0
     own_attack = attack.get(team_id, league_avg_goals)
     own_defense = defense.get(team_id, league_avg_goals)
+    # Real per-fixture breakdown - the Fixture Forecast page (Phase 5)
+    # reads this directly rather than recomputing the Poisson model
+    # client-side, same "read what the engine produced" principle as the
+    # player engine's own per_layer.fixture_quantity.fixtures list.
+    fixture_breakdown = []
 
     for fixture in fixtures:
         opp_id = fixture["opponent_team_id"]
@@ -256,14 +261,32 @@ def project_club_stats(team_id, fixtures, attack, defense, league_avg_goals, clu
         opp_defense = defense.get(opp_id, league_avg_goals)
         xg_for, xg_against = compute_fixture_xg(own_attack, own_defense, opp_attack, opp_defense, league_avg_goals, fixture["is_home"])
 
-        win_p, draw_p, _loss_p = match_outcome_probs(xg_for, xg_against)
+        win_p, draw_p, loss_p = match_outcome_probs(xg_for, xg_against)
+        cs_p = poisson_pmf(0, xg_against)
+        two_p = probability_at_least(2, xg_for)
+        four_p = probability_at_least(4, xg_for)
+
         win_p_total += win_p
         draw_p_total += draw_p
         if not fixture["is_home"]:
             away_win_p_total += win_p
-        cs_p_total += poisson_pmf(0, xg_against)
-        two_p_total += probability_at_least(2, xg_for)
-        four_p_total += probability_at_least(4, xg_for)
+        cs_p_total += cs_p
+        two_p_total += two_p
+        four_p_total += four_p
+
+        fixture_breakdown.append({
+            "gameweek": fixture["gameweek"],
+            "opponent_team_id": fixture["opponent_team_id"],
+            "is_home": fixture["is_home"],
+            "kickoff_at": fixture["kickoff_at"].isoformat(),
+            "win_prob": round(win_p, 3),
+            "draw_prob": round(draw_p, 3),
+            "loss_prob": round(loss_p, 3),
+            "clean_sheet_prob": round(cs_p, 3),
+            "two_plus_goals_prob": round(two_p, 3),
+            "expected_goals_for": round(xg_for, 3),
+            "expected_goals_against": round(xg_against, 3),
+        })
 
     # "expected_count" not "probability" - a real double gameweek sums
     # each fixture's own real probability, so this can legitimately
@@ -277,8 +300,9 @@ def project_club_stats(team_id, fixtures, attack, defense, league_avg_goals, clu
         "clean_sheet": {"expected_count": round(cs_p_total, 3), "points": round(cs_p_total * points_for(club_rules, "clean_sheet"), 2)},
         "two_plus_goals": {"expected_count": round(two_p_total, 3), "points": round(two_p_total * points_for(club_rules, "two_plus_goals"), 2)},
         "four_plus_goals": {"expected_count": round(four_p_total, 3), "points": round(four_p_total * points_for(club_rules, "four_plus_goals"), 2)},
+        "fixtures": fixture_breakdown,
     }
-    total_points = sum(v["points"] for v in per_stat.values())
+    total_points = sum(v["points"] for v in per_stat.values() if isinstance(v, dict) and "points" in v)
     return per_stat, total_points
 
 

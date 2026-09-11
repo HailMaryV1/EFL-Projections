@@ -91,10 +91,46 @@ to read this section alone and know what's real.
       `freeze_predictions.py`/`capture_actuals.py` (the scripts that would
       populate real predictions_and_actuals rows to grade) haven't been
       built - added once there's real captured data to show.
-- [ ] Phase 5 - public frontend (Projected Points, Fixture Forecast across 3
-      divisions, XI Builder with 2 club picks and no budget, Club Picks, Top
-      Picks, Compare, player pages) - reusing Hail Mary's existing navy/cyan
-      design system from `dreamteam-projections/frontend`.
+- [x] Phase 5 - public frontend. Real navy/cyan Hail Mary identity, same
+      component conventions as `dreamteam-projections/frontend` (adapted,
+      not copy-pasted - `TeamBadge` reads real colours straight off
+      `teams.background_color`/`text_color`/`abbreviation` instead of a
+      hand-maintained 20-club map, since fantasy.efl.com's own data already
+      gives real colours for all 72 real clubs). Six real pages:
+      - `/projected-points` - every real player, sortable/filterable, no
+        price/value columns (no budget exists) - real ownership%, season
+        points, rating, fixtures.
+      - `/fixtures` - real win/draw/loss/clean-sheet/2+-goals forecast per
+        division, read from `club_projections`' own real per-fixture
+        breakdown (added this phase - `project_club_stats` now stores a
+        `per_stat.fixtures` array, not just summed horizon totals).
+      - `/best-squad` - the real 7-player + 2-club Fantasy EFL pick,
+        genuinely combined into one tool (not two separate ones like Dream
+        Team's XI/Club-picks split) - `lib/squadBuilder.ts` is a real,
+        documented greedy heuristic (no budget to trade off, just a
+        max-2-per-club cap), formation tabs for all 3 real formations.
+      - `/top-picks` - shareable Top 5 card, downloadable via
+        `html-to-image` (ported from Dream Team's own pattern).
+      - `/compare` - Player Face-Off, real per-horizon/season/ownership
+        comparison (no radar chart in this v1 - simpler bar rows instead).
+      - `/players/[id]` - full real per-stat/per-layer explainability,
+        read directly from the engine's own stored breakdown.
+      **Real bugs found and fixed live, not after**: (1) every unbounded
+      player-pool query hit PostgREST's real 1000-row cap (confirmed live:
+      Projected Points showed "1000 of 1000" instead of the real 3570) -
+      `lib/supabasePaginate.ts`'s `fetchAllRows` now range-paginates every
+      such query, the same lesson `dreamteam-projections` already
+      documents having to learn once. (2) `lib/comparePlayer.ts` queried
+      `algorithm_versions` directly for "latest," which can belong to
+      whichever of the two engines (player/club) happened to run last
+      since they share one version-numbering table - fixed to always read
+      the latest id actually present on the table being queried, the
+      pattern every other page already used correctly. **Verified**:
+      clean typecheck and lint, every page checked live against real data
+      (including a real max-2-per-club Best Squad result and a real
+      Fixture Forecast with real win/draw/loss percentages), mobile
+      layout checked on Projected Points (table -> card breakpoint, no
+      horizontal overflow).
 - [ ] Phase 6 - deployment (GitHub Actions cron + Vercel, live at
       `efl.hailmaryfantasysports.co.uk`).
 
@@ -133,7 +169,7 @@ still apply - see each phase's own notes for what's ported vs. new.
 scripts/            Python - data ingestion + the projection engine
 supabase/migrations/ Numbered SQL migrations, applied via scripts/run_migration.py
 docs/                data-and-weights.md - the living record of what feeds what
-frontend/            Next.js 16 / React 19 / Tailwind 4 - admin settings (Phase 4); public pages come in Phase 5
+frontend/            Next.js 16 / React 19 / Tailwind 4 - admin settings + the public tool suite
 .github/workflows/   added in Phase 6
 ```
 

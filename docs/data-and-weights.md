@@ -66,6 +66,13 @@ primary signal, not a fallback. Form uses a *fully real* per-round exposure
 (a club's `games_played` per round is always a known fact - no proxy needed
 the way player Form needed one).
 
+`per_stat.fixtures` (added for Phase 5's Fixture Forecast page) carries the
+real per-fixture win/draw/loss/clean-sheet/2+-goals probabilities and
+expected goals behind the summed horizon totals - read directly by
+`/fixtures`, never recomputed client-side, same "read what the engine
+produced" principle the player engine's own `per_layer.fixture_quantity.
+fixtures` already follows.
+
 ## Scoring model
 
 Fantasy EFL's real rules (`fantasy.efl.com/help/game-guidelines`, quoted
