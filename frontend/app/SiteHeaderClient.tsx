@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 type NavIcon = (props: { className?: string }) => React.JSX.Element;
 
@@ -50,23 +50,84 @@ const AdminIcon: NavIcon = ({ className }) => (
   </svg>
 );
 
-const NAV_LINKS: { href: string; label: string; icon: NavIcon }[] = [
-  { href: "/", label: "Home", icon: HomeIcon },
+// Split into ANALYSE (read the model's own numbers) and BUILD (use them to
+// make a real squad/pick decision) - same grouping ported from
+// dreamteam-projections' sidebar, adapted to EFL's 5 tools (3+2 instead of
+// PL's 3+3, since EFL has no separate "value finder" tool).
+const ANALYSE_LINKS: { href: string; label: string; icon: NavIcon }[] = [
   { href: "/projected-points", label: "Projected Points", icon: ProjectedPointsIcon },
   { href: "/fixtures", label: "Fixture Forecast", icon: FixturesIcon },
-  { href: "/best-squad", label: "HM Best Squad", icon: SquadIcon },
-  { href: "/top-picks", label: "HM Top Picks", icon: TopPicksIcon },
   { href: "/compare", label: "Player Face-Off", icon: CompareIcon },
 ];
+const BUILD_LINKS: { href: string; label: string; icon: NavIcon }[] = [
+  { href: "/best-squad", label: "HM Best Squad", icon: SquadIcon },
+  { href: "/top-picks", label: "HM Top Picks", icon: TopPicksIcon },
+];
 
-function Brand({ onClick }: { onClick?: () => void }) {
+function NavGroupLabel({ children }: { children: React.ReactNode }) {
+  return <p className="mt-4 mb-1 px-3 font-[family-name:var(--font-cond)] text-[10px] font-bold tracking-[0.2em] text-navy-600 uppercase first:mt-1">{children}</p>;
+}
+
+// Real bug found live (ported fix from dreamteam-projections): React
+// attaches its own click handlers at the root container in the bubble
+// phase, and Next's <Link> calls preventDefault() there to do client-side
+// routing - a bubble-phase document listener here would always see the
+// click AFTER that already happened. Capturing on `document` fires before
+// any of that, so this reliably sees every real link click.
+function useNavigationPending(): boolean {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [pending, setPending] = useState(false);
+  const routeKey = `${pathname}?${searchParams.toString()}`;
+  const previousRouteKey = useRef(routeKey);
+
+  useEffect(() => {
+    if (previousRouteKey.current !== routeKey) {
+      previousRouteKey.current = routeKey;
+      setPending(false);
+    }
+  }, [routeKey]);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const anchor = (e.target as HTMLElement)?.closest("a");
+      if (!anchor) return;
+      const href = anchor.getAttribute("href");
+      if (!href || href.startsWith("http") || href.startsWith("#") || href.startsWith("mailto:") || anchor.target === "_blank") return;
+      setPending(true);
+    }
+    document.addEventListener("click", handleClick, { capture: true });
+    return () => document.removeEventListener("click", handleClick, { capture: true });
+  }, []);
+
+  return pending;
+}
+
+// Thin loading bar under the brand logo+wordmark - real user request:
+// "have the page have a little load icon that shows something has been
+// clicked and its processing... maybe have the hail mary logo with a
+// loading bar underneath". Positioned absolute relative to the whole
+// Brand link so it sits flush under the logo/wordmark block itself, not
+// pinned to the viewport edge.
+function NavLoadingBar({ pending }: { pending: boolean }) {
+  if (!pending) return null;
   return (
-    <Link href="/" className="flex min-w-0 items-center gap-2.5" onClick={onClick}>
+    <div aria-hidden className="absolute inset-x-0 -bottom-1.5 h-0.5 overflow-hidden rounded-full bg-navy-800">
+      <div className="animate-nav-bar h-full w-1/3 rounded-full bg-sky-400" />
+    </div>
+  );
+}
+
+function Brand({ onClick, pending }: { onClick?: () => void; pending: boolean }) {
+  return (
+    <Link href="/" className="relative flex min-w-0 items-center gap-2.5" onClick={onClick}>
       <Image src="/logo.png" alt="Hail Mary" width={26} height={27} priority className="shrink-0" />
       <div className="min-w-0 leading-tight">
         <p className="truncate text-sm font-bold tracking-wide text-navy-100">HAIL MARY</p>
         <p className="truncate text-xs font-medium text-navy-400">EFL Projections</p>
       </div>
+      <NavLoadingBar pending={pending} />
     </Link>
   );
 }
@@ -94,10 +155,17 @@ function NavLink({ href, label, icon: Icon, active, onClick }: { href: string; l
 export default function SiteHeaderClient({ isAdmin }: { isAdmin: boolean }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const pending = useNavigationPending();
 
   const nav = (onLinkClick?: () => void) => (
     <nav className="flex flex-col gap-1">
-      {NAV_LINKS.map((link) => (
+      <NavLink href="/" label="Home" icon={HomeIcon} active={pathname === "/"} onClick={onLinkClick} />
+      <NavGroupLabel>Analyse</NavGroupLabel>
+      {ANALYSE_LINKS.map((link) => (
+        <NavLink key={link.href} {...link} active={pathname === link.href} onClick={onLinkClick} />
+      ))}
+      <NavGroupLabel>Build</NavGroupLabel>
+      {BUILD_LINKS.map((link) => (
         <NavLink key={link.href} {...link} active={pathname === link.href} onClick={onLinkClick} />
       ))}
       {isAdmin && (
@@ -113,7 +181,7 @@ export default function SiteHeaderClient({ isAdmin }: { isAdmin: boolean }) {
     <>
       <div className="sticky top-0 z-30 border-b border-navy-800 bg-navy-950/90 backdrop-blur-sm sm:hidden">
         <div className="flex items-center justify-between gap-3 px-4 py-2.5">
-          <Brand onClick={() => setMenuOpen(false)} />
+          <Brand onClick={() => setMenuOpen(false)} pending={pending} />
           <button
             type="button"
             onClick={() => setMenuOpen((v) => !v)}
@@ -131,7 +199,7 @@ export default function SiteHeaderClient({ isAdmin }: { isAdmin: boolean }) {
 
       <aside className="hidden w-64 shrink-0 border-r border-navy-800 bg-navy-950 p-4 sm:flex sm:flex-col">
         <div className="mb-6 px-1">
-          <Brand />
+          <Brand pending={pending} />
         </div>
         {nav()}
       </aside>
