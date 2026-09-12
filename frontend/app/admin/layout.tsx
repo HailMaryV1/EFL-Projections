@@ -4,10 +4,6 @@ import { isAdminEmail } from "@/lib/adminAccess";
 import AdminSidebar from "./AdminSidebar";
 import { signOut } from "./actions";
 
-// No "Accuracy" nav item yet - freeze_predictions.py/capture_actuals.py
-// (the scripts that would populate real predictions_and_actuals rows to
-// grade) haven't been built (see CLAUDE.md Status) - add it once there's
-// real captured data to show, not a hollow page before then.
 const NAV = [
   { href: "/admin", label: "Overview" },
   { href: "/admin/scoring-rules", label: "Scoring Rules" },
@@ -15,6 +11,7 @@ const NAV = [
   { href: "/admin/layer-weights", label: "Layer Weights" },
   { href: "/admin/club-layer-weights", label: "Club Layer Weights" },
   { href: "/admin/rating-anchors", label: "Rating Anchors" },
+  { href: "/admin/accuracy", label: "Accuracy" },
   { href: "/admin/activity", label: "Activity Log" },
 ];
 

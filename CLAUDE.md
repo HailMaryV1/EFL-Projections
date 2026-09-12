@@ -87,10 +87,50 @@ to read this section alone and know what's real.
       from Phase 2). **Not yet verified signed-in** - needs a real
       Supabase Auth user for this project (Authentication → Users → Add
       User in the Supabase dashboard - the user's own account/password,
-      never entered by Claude). No "Accuracy" page yet -
-      `freeze_predictions.py`/`capture_actuals.py` (the scripts that would
-      populate real predictions_and_actuals rows to grade) haven't been
-      built - added once there's real captured data to show.
+      never entered by Claude).
+      **2026-09-12 - freeze/capture pipeline + Accuracy page built.**
+      `scripts/freeze_predictions.py`/`freeze_club_predictions.py` (new)
+      snapshot each gameweek's real horizon=1 `projections`/
+      `club_projections` row into `predictions_and_actuals`/
+      `club_predictions_and_actuals` once, permanently (`on conflict do
+      nothing`); `scripts/capture_actuals.py`/`capture_club_actuals.py`
+      (new) fill in the real result from `player_stats`/`club_stats` once
+      every real fixture for that player's/club's team in that gameweek
+      has a `kickoff_at` already in the past. Simpler than Dream Team's
+      versions on purpose, matching this project's own schema: no
+      `predicted_xmins_fraction`/`predicted_fixture_count`/clean-sheet-
+      expected columns exist here (migration 0013 is the original,
+      simpler shape - PL's later 0021/0022 columns have no EFL
+      equivalent), and `player_stats` has no raw per-match minutes field
+      at all (only `games_played`, a 0/1 flag) - so `actual_minutes`
+      stays permanently `null` here, never backfilled from a proxy. No
+      cup-leg gating needed either - this project's `fixtures` table has
+      no cup-competition concept, so the fixture gate is a plain "every
+      real fixture for that team this gameweek has kicked off" check.
+      Wired into `.github/workflows/refresh_efl.yml` after both compute
+      steps. **Verified against real data**: `freeze_predictions.py`
+      froze 3570 new rows (one per real player, GW5 - the real current
+      gameweek per `resolve_current_gameweek`), `freeze_club_predictions.py`
+      froze 72; `capture_actuals.py` captured 147 real results (3423 still
+      pending), `capture_club_actuals.py` captured 4 (68 still pending) -
+      correctly partial, not a bug: GW5's real fixtures span
+      2026-09-10 to 2026-09-15, and this was run 2026-09-12, so only the
+      teams whose GW5 game had already kicked off got a real captured
+      result. New `app/admin/accuracy/page.tsx` (+ `lib/accuracyMetrics.ts`,
+      only the pure-math functions genuinely reusable from Dream Team's
+      version - no baseline comparison/minutes-band/cup diagnostics,
+      since none of those are supportable by this project's real schema)
+      shows headline MAE/median-AE/RMSE/bias/error-buckets, a GK/DEF/MID/
+      FWD position breakdown, and a per-gameweek predicted-vs-actual
+      table, for both players and clubs, range-paginated past
+      PostgREST's 1000-row cap from day one (confirmed live against the
+      real DB: the player summary/detail queries return real nested
+      `players`/`teams` join objects, not arrays, matching the page's own
+      types). "Accuracy" added to the admin nav. **Verified**: clean
+      `tsc --noEmit`/`eslint`/`npm run build` (`/admin/accuracy` in the
+      route list), the four scripts' real row counts above pulled
+      directly from the live Supabase database via `env_utils.db_connect()`,
+      not inferred.
 - [x] Phase 5 - public frontend. Real navy/cyan Hail Mary identity, same
       component conventions as `dreamteam-projections/frontend` (adapted,
       not copy-pasted - `TeamBadge` reads real colours straight off

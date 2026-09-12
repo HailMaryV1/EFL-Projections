@@ -60,6 +60,26 @@ jobs:
       - name: Compute club projections
         run: python scripts/compute_club_projections.py
 
+      # Freeze/capture pair (built to close the "no Accuracy page yet" gap
+      # noted in CLAUDE.md Status) - same ordering as dreamteam-projections'
+      # own workflow: freeze whatever horizon=1 now says (a genuine
+      # pre-kickoff snapshot, permanent once written), then capture real
+      # results for any gameweek that has actually finished kicking off
+      # since the last run. Both freeze scripts are pure inserts with
+      # `on conflict do nothing` and both capture scripts are idempotent
+      # updates - safe to run unconditionally every 6 hours.
+      - name: Freeze player predictions
+        run: python scripts/freeze_predictions.py
+
+      - name: Freeze club predictions
+        run: python scripts/freeze_club_predictions.py
+
+      - name: Capture player actuals
+        run: python scripts/capture_actuals.py
+
+      - name: Capture club actuals
+        run: python scripts/capture_club_actuals.py
+
       - name: Fail the run if data ingestion had a real problem
         if: steps.ingestion.outcome == 'failure'
         run: |
