@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
+import { isAdminEmail } from "@/lib/adminAccess";
 
 export async function signOut() {
   const supabase = await createAuthServerClient();
@@ -24,7 +25,7 @@ export async function triggerRecompute() {
   const {
     data: { user },
   } = await authClient.auth.getUser();
-  if (!user) throw new Error("Not signed in.");
+  if (!isAdminEmail(user?.email)) throw new Error("Not authorized.");
 
   const token = process.env.GITHUB_ACTIONS_TOKEN;
   if (!token) {

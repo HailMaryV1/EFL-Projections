@@ -1,4 +1,5 @@
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
+import { isAdminEmail } from "@/lib/adminAccess";
 import SiteHeaderClient from "./SiteHeaderClient";
 
 // Thin async Server Component wrapper - checks the real Supabase Auth
@@ -11,5 +12,5 @@ export default async function SiteHeader() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  return <SiteHeaderClient isAdmin={Boolean(user)} />;
+  return <SiteHeaderClient isAdmin={isAdminEmail(user?.email)} />;
 }

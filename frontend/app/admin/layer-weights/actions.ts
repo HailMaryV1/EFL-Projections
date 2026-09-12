@@ -4,13 +4,14 @@ import { revalidatePath } from "next/cache";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
 import { createServiceSupabaseClient } from "@/lib/supabaseServiceClient";
 import { bumpAlgorithmVersion, logActivity } from "@/lib/adminHelpers";
+import { isAdminEmail } from "@/lib/adminAccess";
 
 export async function saveLayerWeights(formData: FormData) {
   const authClient = await createAuthServerClient();
   const {
     data: { user },
   } = await authClient.auth.getUser();
-  if (!user) throw new Error("Not signed in.");
+  if (!user || !isAdminEmail(user.email)) throw new Error("Not authorized.");
 
   const supabase = createServiceSupabaseClient();
   const { data: rows } = await supabase.from("layer_weights").select("id, horizon, position, layer, weight");

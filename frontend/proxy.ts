@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { isAdminEmail } from "@/lib/adminAccess";
 
 // Same site-wide gate as dreamteam-projections' own proxy.ts (ported
 // unchanged - game-agnostic already): HTTP Basic Auth in front of the
@@ -62,7 +63,11 @@ export default async function proxy(request: NextRequest) {
 
   const isProtectedRoute = request.nextUrl.pathname.startsWith("/admin");
 
-  if (isProtectedRoute && !user) {
+  // Real fix 2026-09-16 (ported from dreamteam-projections): "is signed in"
+  // isn't the same as "is the admin" - see lib/adminAccess.ts for why that
+  // distinction matters once this shared Supabase project has real
+  // customer accounts.
+  if (isProtectedRoute && !isAdminEmail(user?.email)) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

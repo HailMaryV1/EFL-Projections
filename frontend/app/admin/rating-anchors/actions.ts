@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
 import { createServiceSupabaseClient } from "@/lib/supabaseServiceClient";
 import { logActivity } from "@/lib/adminHelpers";
+import { isAdminEmail } from "@/lib/adminAccess";
 
 const LAYERS = ["form", "fixture_quantity", "fixture_quality", "live_odds"] as const;
 const POSITIONS = ["GK", "DEF", "MID", "FWD"] as const;
@@ -36,7 +37,7 @@ export async function recalibrateAnchors() {
   const {
     data: { user },
   } = await authClient.auth.getUser();
-  if (!user) throw new Error("Not signed in.");
+  if (!user || !isAdminEmail(user.email)) throw new Error("Not authorized.");
 
   const supabase = createServiceSupabaseClient();
 

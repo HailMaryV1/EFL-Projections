@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
+import { isAdminEmail } from "@/lib/adminAccess";
 import AdminSidebar from "./AdminSidebar";
 import { signOut } from "./actions";
 
@@ -24,7 +25,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user) {
+  if (!user || !isAdminEmail(user.email)) {
     redirect("/login");
   }
 
