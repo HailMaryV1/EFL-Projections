@@ -71,13 +71,27 @@ def apply_result(stats, goals_for, goals_against, is_away):
 def build_round_and_season_stats(rounds):
     """Real per-round club results plus a running season aggregate,
     derived purely from real completed match scores - a game that hasn't
-    finished yet (no real score) contributes nothing, never a guess."""
+    finished yet (no real score) contributes nothing, never a guess.
+
+    Real bug fixed 2026-09-12: fantasy.efl.com's own rounds.json returns a
+    genuine DUPLICATE round object (same real roundNumber, empty `games`)
+    for early rounds (confirmed live: rounds 1-3 each appeared twice, the
+    second copy with 0 games). Games are grouped by roundNumber FIRST so
+    each real round is processed exactly once - the naive per-object loop
+    this replaced re-ran the season-accumulation step once per *object*,
+    silently double-counting every stat (games_played, wins, goals, etc)
+    for any round with a duplicate, which in turn deflated every player's
+    real xmins_fraction (games_played / inflated team_games_played) and
+    suppressed every projected stat that multiplies by it."""
+    games_by_round = {}
+    for round_ in rounds:
+        games_by_round.setdefault(round_["roundNumber"], []).extend(round_.get("games", []))
+
     per_round = {}
     season = {}
-    for round_ in sorted(rounds, key=lambda r: r["roundNumber"]):
-        round_number = round_["roundNumber"]
+    for round_number in sorted(games_by_round):
         bucket = per_round.setdefault(round_number, {})
-        for game in round_.get("games", []):
+        for game in games_by_round[round_number]:
             if game.get("status") != "completed" or game.get("homeScore") is None or game.get("awayScore") is None:
                 continue
             home_id, away_id = str(game["homeId"]), str(game["awayId"])
