@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
 import { fetchAllRows } from "@/lib/supabasePaginate";
-import SiteHeader from "../SiteHeader";
 import FixtureCard, { type FixtureSide, type ProjectedPlayer } from "./FixtureCard";
 
 const COMPETITIONS = [
@@ -26,63 +25,82 @@ export default async function FixturesPage({ searchParams }: { searchParams: Pro
   const competition = COMPETITIONS.some((c) => c.value === params.competition) ? params.competition! : "championship";
   const supabase = await createAuthServerClient();
 
-  const { data: gwRows } = await supabase.from("fixtures").select("gameweek").eq("competition", competition);
-  const gameweeks = Array.from(new Set((gwRows ?? []).map((r) => r.gameweek))).sort((a, b) => a - b);
-
   const now = new Date();
-  const { data: currentGwRow } = await supabase
-    .from("fixtures")
-    .select("gameweek")
-    .eq("competition", competition)
-    .gte("kickoff_at", now.toISOString())
-    .order("gameweek", { ascending: true })
-    .limit(1)
-    .maybeSingle();
+  // Real perf fix (ported from dreamteam-projections): neither of these
+  // two initial lookups reads the other's result - both only depend on
+  // `competition`, already known from searchParams.
+  const [{ data: gwRows }, { data: currentGwRow }] = await Promise.all([
+    supabase.from("fixtures").select("gameweek").eq("competition", competition),
+    supabase
+      .from("fixtures")
+      .select("gameweek")
+      .eq("competition", competition)
+      .gte("kickoff_at", now.toISOString())
+      .order("gameweek", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  const gameweeks = Array.from(new Set((gwRows ?? []).map((r) => r.gameweek))).sort((a, b) => a - b);
   const currentGameweek = currentGwRow?.gameweek ?? gameweeks[gameweeks.length - 1] ?? gameweeks[0];
   const selectedGameweek = params.gameweek ? Number(params.gameweek) : currentGameweek;
 
-  const { data: fixtureRows, error: fixturesError } = await supabase
-    .from("fixtures")
-    .select("id, kickoff_at, home_team_id, away_team_id, teams_home:home_team_id(id, name, abbreviation, background_color, text_color), teams_away:away_team_id(id, name, abbreviation, background_color, text_color)")
-    .eq("competition", competition)
-    .eq("gameweek", selectedGameweek)
-    .order("kickoff_at");
+  // Real perf fix (ported from dreamteam-projections): the fixture list
+  // and both "latest algorithm version" lookups are three independent
+  // queries (fixtures depends only on competition/gameweek already known;
+  // neither version lookup depends on fixtures or on each other) that were
+  // being awaited one after another - three real round-trips for the
+  // price of one.
+  const [{ data: fixtureRows, error: fixturesError }, { data: latestClubVersionRow }, { data: latestPlayerVersionRow }] = await Promise.all([
+    supabase
+      .from("fixtures")
+      .select("id, kickoff_at, home_team_id, away_team_id, teams_home:home_team_id(id, name, abbreviation, background_color, text_color), teams_away:away_team_id(id, name, abbreviation, background_color, text_color)")
+      .eq("competition", competition)
+      .eq("gameweek", selectedGameweek)
+      .order("kickoff_at"),
+    supabase.from("club_projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle(),
+  ]);
   if (fixturesError) throw new Error(`Failed to load fixtures: ${fixturesError.message}`);
 
   const teamIds = Array.from(new Set((fixtureRows ?? []).flatMap((f) => [f.home_team_id, f.away_team_id])));
-
-  const { data: latestClubVersionRow } = await supabase.from("club_projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle();
   const latestClubVersionId = latestClubVersionRow?.algorithm_version_id;
-
-  const { data: clubProjRows } = latestClubVersionId && teamIds.length
-    ? await supabase.from("club_projections").select("team_id, per_stat").eq("horizon", 1).eq("algorithm_version_id", latestClubVersionId).in("team_id", teamIds)
-    : { data: [] };
-  const clubFixturesByTeam = new Map<number, ClubFixtureEntry[]>();
-  for (const row of clubProjRows ?? []) {
-    const perStat = row.per_stat as { fixtures?: ClubFixtureEntry[] };
-    clubFixturesByTeam.set(row.team_id, perStat.fixtures ?? []);
-  }
-
-  const { data: latestPlayerVersionRow } = await supabase.from("projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle();
   const latestPlayerVersionId = latestPlayerVersionRow?.algorithm_version_id;
+
   type PlayerJoin = { full_name: string; team_id: number };
   type ProjRow = { total_points: number; player_id: number; players: PlayerJoin };
-  // Range-paginated - unfiltered by division, so this spans up to the full
-  // ~3570-player pool for the current gameweek (well past PostgREST's
-  // 1000-row cap - same real bug already found on Projected Points).
-  const projRows =
+  // Real perf fix (ported from dreamteam-projections): club fixture
+  // probabilities and player projections are two independent queries,
+  // both keyed only on teamIds/selectedGameweek - neither reads the
+  // other's result. Range-paginated for projRows - unfiltered by
+  // division, so this spans up to the full ~3570-player pool for the
+  // current gameweek (well past PostgREST's 1000-row cap - same real bug
+  // already found on Projected Points).
+  const [{ data: clubProjRows }, projRows] = await Promise.all([
+    latestClubVersionId && teamIds.length
+      ? supabase.from("club_projections").select("team_id, per_stat").eq("horizon", 1).eq("algorithm_version_id", latestClubVersionId).in("team_id", teamIds)
+      : Promise.resolve({ data: [] }),
     latestPlayerVersionId && teamIds.length
-      ? await fetchAllRows<ProjRow>((from, to) =>
+      ? fetchAllRows<ProjRow>((from, to) =>
           supabase
             .from("projections")
             .select("total_points, player_id, players!inner(full_name, team_id)")
             .eq("horizon", 1)
             .eq("gameweek", selectedGameweek)
             .eq("algorithm_version_id", latestPlayerVersionId)
+            // Real bug (see projected-points/page.tsx's identical fix): no
+            // tiebreaker after total_points leaves row order unstable
+            // across paginated pages once ties exist.
             .order("total_points", { ascending: false })
+            .order("player_id")
             .range(from, to) as unknown as PromiseLike<{ data: ProjRow[] | null; error: { message: string } | null }>
         )
-      : [];
+      : Promise.resolve([] as ProjRow[]),
+  ]);
+  const clubFixturesByTeam = new Map<number, ClubFixtureEntry[]>();
+  for (const row of clubProjRows ?? []) {
+    const perStat = row.per_stat as { fixtures?: ClubFixtureEntry[] };
+    clubFixturesByTeam.set(row.team_id, perStat.fixtures ?? []);
+  }
   const projectedByTeam = new Map<number, ProjectedPlayer[]>();
   for (const r of projRows) {
     const player = r.players as unknown as PlayerJoin;
@@ -107,9 +125,7 @@ export default async function FixturesPage({ searchParams }: { searchParams: Pro
   }
 
   return (
-    <div className="flex flex-1 flex-col sm:flex-row">
-      <SiteHeader />
-      <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 p-6">
+    <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 p-6">
         <h1 className="text-2xl font-semibold text-navy-100">Fixture Forecast</h1>
         <p className="mt-1 text-sm text-navy-300">
           Real win/draw/loss odds, projected goals, and clean sheet chances - built from each club&rsquo;s own real season attack/
@@ -182,7 +198,6 @@ export default async function FixturesPage({ searchParams }: { searchParams: Pro
             })}
           </div>
         )}
-      </main>
-    </div>
+    </main>
   );
 }

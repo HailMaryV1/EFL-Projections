@@ -1,5 +1,5 @@
 import { type SquadCandidate } from "@/lib/squadBuilder";
-import TeamBadge from "../TeamBadge";
+import TeamBadge from "../../TeamBadge";
 
 const ROW_ORDER: SquadCandidate["position"][] = ["FWD", "MID", "DEF", "GK"];
 

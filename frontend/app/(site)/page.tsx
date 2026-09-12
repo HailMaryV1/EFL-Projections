@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
-import SiteHeader from "./SiteHeader";
 
 type FeatureCard = { href: string; title: string; description: string };
 const FEATURES: FeatureCard[] = [
@@ -58,9 +57,7 @@ export default async function HomePage() {
   }));
 
   return (
-    <div className="flex flex-1 flex-col sm:flex-row">
-      <SiteHeader />
-      <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 p-6 sm:p-10">
+    <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 p-6 sm:p-10">
         <p className="text-xs font-bold uppercase tracking-wide text-sky-400">Hail Mary Fantasy Sports</p>
         <h1 className="mt-2 font-[family-name:var(--font-cond)] text-4xl font-extrabold text-navy-100 sm:text-5xl">EFL Projections</h1>
         <p className="mt-4 max-w-2xl text-base text-navy-300">
@@ -122,8 +119,7 @@ export default async function HomePage() {
             ))}
           </div>
         </div>
-      </main>
-    </div>
+    </main>
   );
 }
 

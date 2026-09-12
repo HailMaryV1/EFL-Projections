@@ -1,8 +1,7 @@
 import { notFound } from "next/navigation";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
 import { type FixtureEntry, formatFixture, fdrColor } from "@/lib/fixtures";
-import SiteHeader from "../../SiteHeader";
-import TeamBadge, { type TeamBadgeInfo } from "../../TeamBadge";
+import TeamBadge, { type TeamBadgeInfo } from "../../../TeamBadge";
 
 const HORIZONS = [1, 2, 3, 5] as const;
 const LAYER_LABELS: Record<string, string> = { form: "Form", fixture_quantity: "Fixture Quantity", fixture_quality: "Fixture Quality", live_odds: "Live Odds" };
@@ -13,11 +12,24 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
   const playerId = Number(id);
   const supabase = await createAuthServerClient();
 
-  const { data: playerRow } = await supabase
-    .from("players")
-    .select("id, full_name, position, ownership_pct, status, injury_status, suspension_detail, teams!team_id(name, competition, abbreviation, background_color, text_color)")
-    .eq("id", playerId)
-    .maybeSingle();
+  // Real perf fix (ported from dreamteam-projections): playerRow,
+  // seasonRow and latestVersionRow are three independent lookups (none
+  // reads another's result) that were being awaited one after another -
+  // three real round-trips for the price of one.
+  const [{ data: playerRow }, { data: seasonRow }, { data: latestVersionRow }] = await Promise.all([
+    supabase
+      .from("players")
+      .select("id, full_name, position, ownership_pct, status, injury_status, suspension_detail, teams!team_id(name, competition, abbreviation, background_color, text_color)")
+      .eq("id", playerId)
+      .maybeSingle(),
+    supabase
+      .from("player_stats")
+      .select("goals, assists, key_passes, shots_on_target, clean_sheets, clearances, blocks, tackles, interceptions, saves, yellow_cards, red_cards, own_goals, missed_penalties, games_played, total_points")
+      .eq("player_id", playerId)
+      .is("gameweek", null)
+      .maybeSingle(),
+    supabase.from("projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle(),
+  ]);
   if (!playerRow) notFound();
 
   type TeamJoin = { name: string; competition: string; abbreviation: string; background_color: string; text_color: string } | null;
@@ -28,15 +40,6 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
     backgroundColor: player.teams?.background_color ?? null,
     textColor: player.teams?.text_color ?? null,
   };
-
-  const { data: seasonRow } = await supabase
-    .from("player_stats")
-    .select("goals, assists, key_passes, shots_on_target, clean_sheets, clearances, blocks, tackles, interceptions, saves, yellow_cards, red_cards, own_goals, missed_penalties, games_played, total_points")
-    .eq("player_id", playerId)
-    .is("gameweek", null)
-    .maybeSingle();
-
-  const { data: latestVersionRow } = await supabase.from("projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle();
   const latestVersionId = latestVersionRow?.algorithm_version_id;
 
   const { data: projRows } = latestVersionId
@@ -51,9 +54,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
   const fixtures5 = ((horizon5?.per_layer as { fixture_quantity?: { fixtures?: FixtureEntry[] } })?.fixture_quantity?.fixtures ?? []).slice().sort((a, b) => a.gameweek - b.gameweek);
 
   return (
-    <div className="flex flex-1 flex-col sm:flex-row">
-      <SiteHeader />
-      <main className="mx-auto w-full min-w-0 max-w-3xl flex-1 p-6">
+    <main className="mx-auto w-full min-w-0 max-w-3xl flex-1 p-6">
         <div className="flex items-center gap-4">
           <TeamBadge team={team} size="lg" />
           <div>
@@ -169,8 +170,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
             {fixtures5.length === 0 && <p className="col-span-full text-sm text-navy-400">No real upcoming fixtures found yet.</p>}
           </div>
         </section>
-      </main>
-    </div>
+    </main>
   );
 }
 

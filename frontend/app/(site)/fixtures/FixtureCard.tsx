@@ -1,5 +1,5 @@
 import Link from "next/link";
-import TeamBadge, { type TeamBadgeInfo } from "../TeamBadge";
+import TeamBadge, { type TeamBadgeInfo } from "../../TeamBadge";
 
 export type FixtureSide = {
   team: TeamBadgeInfo & { id: number; name: string };

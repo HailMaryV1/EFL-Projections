@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { type FixtureEntry, formatFixture } from "@/lib/fixtures";
-import TeamBadge, { type TeamBadgeInfo } from "../TeamBadge";
+import TeamBadge, { type TeamBadgeInfo } from "../../TeamBadge";
 
 type Player = {
   playerId: number;

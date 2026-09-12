@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
 import { fetchAllRows } from "@/lib/supabasePaginate";
-import SiteHeader from "../SiteHeader";
 import Top5Builder from "./Top5Builder";
 
 const HORIZON_LABELS: Record<string, string> = { "1": "This gameweek", "2": "Next 2 gameweeks", "3": "Next 3 gameweeks", "5": "Next 5 gameweeks" };
@@ -32,6 +31,10 @@ export default async function TopPicksPage({ searchParams }: { searchParams: Pro
             .eq("horizon", horizon)
             .eq("gameweek", gameweek)
             .eq("algorithm_version_id", latestVersionId)
+            // Real bug (see best-squad/page.tsx's identical fix): no ORDER
+            // BY before a range()-paginated fetch leaves row order unstable
+            // across pages, causing real duplicate/missing player_ids.
+            .order("player_id")
             .range(from, to) as unknown as PromiseLike<{ data: ProjectionRow[] | null; error: { message: string } | null }>
         )
       : [];
@@ -54,9 +57,7 @@ export default async function TopPicksPage({ searchParams }: { searchParams: Pro
     }));
 
   return (
-    <div className="flex flex-1 flex-col sm:flex-row">
-      <SiteHeader />
-      <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 p-6">
+    <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 p-6">
         <h1 className="text-2xl font-semibold text-navy-100">HM Top Picks</h1>
         <p className="mt-1 max-w-2xl text-sm text-navy-300">
           Build a real, shareable Top 5 leaderboard - any position, any division - and download it as an image for Twitter/X.
@@ -81,7 +82,6 @@ export default async function TopPicksPage({ searchParams }: { searchParams: Pro
             <Top5Builder players={players} gameweek={gameweek} horizon={horizon} />
           </div>
         )}
-      </main>
-    </div>
+    </main>
   );
 }

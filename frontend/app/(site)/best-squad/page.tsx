@@ -2,8 +2,7 @@ import Link from "next/link";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
 import { fetchAllRows } from "@/lib/supabasePaginate";
 import { buildBestSquad, buildBestClubPicks, type SquadCandidate, type ClubCandidate } from "@/lib/squadBuilder";
-import SiteHeader from "../SiteHeader";
-import TeamBadge from "../TeamBadge";
+import TeamBadge from "../../TeamBadge";
 import SquadTabs from "./SquadTabs";
 
 const HORIZON_LABELS: Record<string, string> = { "1": "This gameweek", "2": "Next 2 gameweeks", "3": "Next 3 gameweeks", "5": "Next 5 gameweeks" };
@@ -32,6 +31,14 @@ export default async function BestSquadPage({ searchParams }: { searchParams: Pr
             .eq("horizon", horizon)
             .eq("gameweek", gameweek)
             .eq("algorithm_version_id", latestVersionId)
+            // Real bug found live while testing the page-load perf work: no
+            // ORDER BY before a range()-paginated fetch leaves Postgres free
+            // to return rows in a different order per page request, which
+            // silently produced duplicate/missing player_ids across pages
+            // (confirmed live via a "duplicate key" React warning on
+            // Projected Points, which shares this same pagination helper).
+            // A unique tiebreaker key makes every page's ordering stable.
+            .order("player_id")
             .range(from, to) as unknown as PromiseLike<{ data: ProjectionRow[] | null; error: { message: string } | null }>
         )
       : [];
@@ -76,9 +83,7 @@ export default async function BestSquadPage({ searchParams }: { searchParams: Pr
   const combinedTotal = byFormation[bestFormation].totalPoints + bestClubs.reduce((sum, c) => sum + c.points, 0);
 
   return (
-    <div className="flex flex-1 flex-col sm:flex-row">
-      <SiteHeader />
-      <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 p-6">
+    <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 p-6">
         <h1 className="text-2xl font-semibold text-navy-100">HM Best Squad</h1>
         <p className="mt-1 max-w-2xl text-sm text-navy-300">
           The strongest real 7 players Fantasy EFL&rsquo;s own rules allow (any of the 3 real formations, max 2 per club) plus
@@ -138,7 +143,6 @@ export default async function BestSquadPage({ searchParams }: { searchParams: Pr
             </section>
           </>
         )}
-      </main>
-    </div>
+    </main>
   );
 }

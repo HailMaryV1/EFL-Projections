@@ -2,7 +2,6 @@ import Link from "next/link";
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
 import { type FixtureEntry } from "@/lib/fixtures";
 import { fetchAllRows } from "@/lib/supabasePaginate";
-import SiteHeader from "../SiteHeader";
 import ProjectionsTable from "./ProjectionsTable";
 
 const HORIZON_LABELS: Record<string, string> = { "1": "This gameweek", "2": "Next 2 gameweeks", "3": "Next 3 gameweeks", "5": "Next 5 gameweeks" };
@@ -15,9 +14,17 @@ export default async function ProjectedPointsPage({ searchParams }: { searchPara
   const { data: latestVersionRow } = await supabase.from("projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle();
   const latestVersionId = latestVersionRow?.algorithm_version_id;
 
-  const { data: gameweekRows } = latestVersionId
-    ? await supabase.from("projections").select("gameweek").eq("horizon", horizon).eq("algorithm_version_id", latestVersionId)
-    : { data: [] };
+  // Real perf fix (ported from dreamteam-projections): gameweekRows needs
+  // latestVersionId, but the season-aggregate seasonRows fetch below never
+  // depended on either of these - it was awaited one after another anyway.
+  const [{ data: gameweekRows }, seasonRows] = await Promise.all([
+    latestVersionId
+      ? supabase.from("projections").select("gameweek").eq("horizon", horizon).eq("algorithm_version_id", latestVersionId)
+      : Promise.resolve({ data: [] }),
+    fetchAllRows<{ player_id: number; total_points: number }>((from, to) =>
+      supabase.from("player_stats").select("player_id, total_points").is("gameweek", null).range(from, to)
+    ),
+  ]);
   const gameweek = Array.from(new Set((gameweekRows ?? []).map((r) => r.gameweek)))[0] ?? null;
 
   type TeamJoin = { name: string; competition: string; abbreviation: string; background_color: string; text_color: string } | null;
@@ -38,14 +45,21 @@ export default async function ProjectedPointsPage({ searchParams }: { searchPara
             .eq("horizon", horizon)
             .eq("gameweek", gameweek)
             .eq("algorithm_version_id", latestVersionId)
+            // Real bug found live while testing the page-load perf work:
+            // ordering by total_points alone before a range()-paginated
+            // fetch is unstable across pages once ties exist (many players
+            // share the same total_points, especially 0) - Postgres is free
+            // to return them in a different relative order per page
+            // request, silently producing duplicate/missing player_ids
+            // across the full ~3570-player fetch (confirmed live via a
+            // "duplicate key" React warning on this exact page). A unique
+            // tiebreaker key makes every page's ordering stable.
             .order("total_points", { ascending: false })
+            .order("player_id")
             .range(from, to) as unknown as PromiseLike<{ data: ProjectionRow[] | null; error: { message: string } | null }>
         )
       : [];
 
-  const seasonRows = await fetchAllRows<{ player_id: number; total_points: number }>((from, to) =>
-    supabase.from("player_stats").select("player_id, total_points").is("gameweek", null).range(from, to)
-  );
   const seasonPointsByPlayer = new Map(seasonRows.map((r) => [r.player_id, Number(r.total_points) || 0]));
 
   const players = rows.map((r) => {
@@ -71,9 +85,7 @@ export default async function ProjectedPointsPage({ searchParams }: { searchPara
   });
 
   return (
-    <div className="flex flex-1 flex-col sm:flex-row">
-      <SiteHeader />
-      <main className="mx-auto w-full min-w-0 max-w-[1600px] flex-1 p-6">
+    <main className="mx-auto w-full min-w-0 max-w-[1600px] flex-1 p-6">
         <h1 className="text-2xl font-semibold text-navy-100">Projected Points</h1>
         <p className="mt-1 text-sm text-navy-300">
           Every real, priced Fantasy EFL stat, per player, per gameweek - Championship, League One and League Two together.
@@ -107,7 +119,6 @@ export default async function ProjectedPointsPage({ searchParams }: { searchPara
             <ProjectionsTable players={players} />
           </div>
         )}
-      </main>
-    </div>
+    </main>
   );
 }

@@ -1,4 +1,4 @@
-import TeamBadge, { type TeamBadgeInfo } from "../TeamBadge";
+import TeamBadge, { type TeamBadgeInfo } from "../../TeamBadge";
 
 export type TopFiveEntry = {
   playerId: number;

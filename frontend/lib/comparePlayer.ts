@@ -1,30 +1,36 @@
 import { createAuthServerClient } from "@/lib/supabaseServerClient";
 import { type FixtureEntry } from "@/lib/fixtures";
-import { type ComparePlayer } from "@/app/compare/CompareView";
+import { type ComparePlayer } from "@/app/(site)/compare/CompareView";
 
 const HORIZONS = [1, 2, 3, 5] as const;
 
 export async function loadComparePlayer(supabase: Awaited<ReturnType<typeof createAuthServerClient>>, playerId: number): Promise<ComparePlayer | null> {
-  const { data: playerRow } = await supabase
-    .from("players")
-    .select("id, full_name, position, ownership_pct, teams!team_id(name, abbreviation, background_color, text_color)")
-    .eq("id", playerId)
-    .maybeSingle();
+  // Real perf fix (ported from dreamteam-projections): playerRow,
+  // latestVersionRow and seasonStatsRow are three independent lookups
+  // keyed only on playerId (never on each other's result) - only projRows
+  // genuinely needs to wait, for the real algorithm_version_id.
+  const [{ data: playerRow }, { data: latestVersionRow }, { data: seasonStatsRow }] = await Promise.all([
+    supabase
+      .from("players")
+      .select("id, full_name, position, ownership_pct, teams!team_id(name, abbreviation, background_color, text_color)")
+      .eq("id", playerId)
+      .maybeSingle(),
+    // Real bug found live: compute_player_projections.py and
+    // compute_club_projections.py share ONE algorithm_versions table (by
+    // design - "one version numbering scheme for the whole project", see
+    // CLAUDE.md), so the table's own globally-latest id can belong to
+    // whichever engine happened to run last - not necessarily one with any
+    // real player projections. The correct "latest" is always the max
+    // algorithm_version_id actually present on the table being queried, the
+    // same pattern every other page (Projected Points, Fixtures, Best
+    // Squad) already uses - never algorithm_versions directly for this.
+    supabase.from("projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("player_stats").select("goals, assists, games_played, total_points").eq("player_id", playerId).eq("season", "2026/27").is("gameweek", null).maybeSingle(),
+  ]);
   if (!playerRow) return null;
   type TeamJoin = { name: string; abbreviation: string; background_color: string; text_color: string } | null;
   type PRow = { id: number; full_name: string; position: ComparePlayer["position"]; ownership_pct: number | null; teams: TeamJoin };
   const p = playerRow as unknown as PRow;
-
-  // Real bug found live: compute_player_projections.py and
-  // compute_club_projections.py share ONE algorithm_versions table (by
-  // design - "one version numbering scheme for the whole project", see
-  // CLAUDE.md), so the table's own globally-latest id can belong to
-  // whichever engine happened to run last - not necessarily one with any
-  // real player projections. The correct "latest" is always the max
-  // algorithm_version_id actually present on the table being queried, the
-  // same pattern every other page (Projected Points, Fixtures, Best
-  // Squad) already uses - never algorithm_versions directly for this.
-  const { data: latestVersionRow } = await supabase.from("projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle();
   const algorithmVersionId = latestVersionRow?.algorithm_version_id;
 
   const { data: projRows } = algorithmVersionId
@@ -42,8 +48,6 @@ export async function loadComparePlayer(supabase: Awaited<ReturnType<typeof crea
       fixtures = (fq?.fixtures ?? []).slice().sort((x, y) => x.gameweek - y.gameweek).slice(0, 5);
     }
   }
-
-  const { data: seasonStatsRow } = await supabase.from("player_stats").select("goals, assists, games_played, total_points").eq("player_id", playerId).eq("season", "2026/27").is("gameweek", null).maybeSingle();
 
   return {
     id: p.id,

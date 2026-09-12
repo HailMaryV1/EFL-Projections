@@ -1,5 +1,5 @@
 import { type FixtureEntry, formatFixture, fdrColor } from "@/lib/fixtures";
-import TeamBadge, { type TeamBadgeInfo } from "../TeamBadge";
+import TeamBadge, { type TeamBadgeInfo } from "../../TeamBadge";
 
 export type ComparePlayer = {
   id: number;
