@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import TopFiveCard, { type TopFiveEntry } from "./TopFiveCard";
 import DownloadTopFiveButton from "./DownloadTopFiveButton";
+import ScaleToFit from "../../ScaleToFit";
 
 type Player = TopFiveEntry;
 
@@ -93,7 +94,14 @@ export default function Top5Builder({ players, gameweek, horizon }: { players: (
       </div>
 
       <div className="min-w-0 shrink-0 overflow-x-auto">
-        <TopFiveCard data={{ gameweek, horizon, title, players: top5 }} />
+        {/* Real user report from a phone screenshot: this fixed-width
+            card was cut off on mobile - overflow-x-auto technically made
+            it scrollable, but nothing hinted at that, and the wrong half
+            showed by default. ScaleToFit shrinks the preview to fit;
+            overflow-x-auto stays as the pre-hydration fallback. */}
+        <ScaleToFit>
+          <TopFiveCard data={{ gameweek, horizon, title, players: top5 }} />
+        </ScaleToFit>
       </div>
     </div>
   );
