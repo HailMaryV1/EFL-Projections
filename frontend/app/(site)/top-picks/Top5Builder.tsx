@@ -34,6 +34,10 @@ export default function Top5Builder({ players, gameweek, horizon }: { players: (
   }, [players, position, competition]);
 
   const title = buildTitle(position, competition);
+  // Real bug fix: this used to always say "for Gameweek {gameweek}" even
+  // when horizon > 1 combines several real gameweeks' points into one
+  // total - same real GW-range label TopFiveCard's own badge already uses.
+  const gameweekLabel = horizon > 1 ? `Gameweeks ${gameweek}-${gameweek + horizon - 1}` : `Gameweek ${gameweek}`;
 
   return (
     <div className="flex min-w-0 flex-col gap-6 lg:flex-row lg:items-start">
@@ -73,7 +77,7 @@ export default function Top5Builder({ players, gameweek, horizon }: { players: (
         </div>
 
         <p className="text-sm text-navy-300">
-          <span className="font-semibold text-navy-100">{title}</span> for Gameweek {gameweek}
+          <span className="font-semibold text-navy-100">{title}</span> for {gameweekLabel}
           {top5.length < 5 && <span className="text-amber-400"> - only {top5.length} real player(s) match these filters.</span>}
         </p>
 
