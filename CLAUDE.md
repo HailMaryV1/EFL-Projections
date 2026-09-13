@@ -171,14 +171,47 @@ to read this section alone and know what's real.
       Fixture Forecast with real win/draw/loss percentages), mobile
       layout checked on Projected Points (table -> card breakpoint, no
       horizontal overflow).
-- [ ] Phase 6 - deployment. `.github/workflows/refresh_efl.yml` written
-      (6-hourly cron + `workflow_dispatch`, no Playwright install step
-      needed - every real source is plain `fantasy.efl.com` JSON). Admin
-      overview's "Recompute now" button wired to it
-      (`app/admin/RecomputeButton.tsx` + `triggerRecompute` in
-      `app/admin/actions.ts`), same pattern as dreamteam-projections.
-      **Not yet live** - needs the one-time human setup below, and hasn't
-      had a real end-to-end CI run yet.
+- [x] Phase 6 - deployment. `.github/workflows/refresh_efl.yml` (6-hourly
+      cron + `workflow_dispatch`, no Playwright install step needed - every
+      real source is plain `fantasy.efl.com` JSON). Admin overview's
+      "Recompute now" button wired to it (`app/admin/RecomputeButton.tsx` +
+      `triggerRecompute` in `app/admin/actions.ts`), same pattern as
+      dreamteam-projections. **Live**: GitHub Actions secret/PAT set,
+      Vercel project deployed (Root Directory=`frontend`), custom domain
+      `efl.hailmaryfantasysports.co.uk` resolving, a real end-to-end
+      `workflow_dispatch` run confirmed green.
+- **2026-09-13 - real bug fixes + `live_scores` pivot for per-round player
+  stats.** Two real bugs found and fixed: (1) `scrape_club_stats.py` was
+  double-counting `games_played`/goals/etc for rounds 1-3, because
+  `rounds.json` returns a genuine duplicate (empty) round object for those
+  rounds and the old per-object aggregation loop re-ran the season-sum step
+  for each duplicate - inflated `team_games_played` deflated every player's
+  Xmins-multiplied stat project-wide (fixed: group games by round number
+  before aggregating). (2) thousands of stale, all-zero `player_stats` rows
+  from the original pre-pivot DreamTeamTonic scraper had never been cleaned
+  up, so `capture_actuals.py` was copying stale `0.00` in as real GW5
+  results - deleted (identified by their shared real `created_at`
+  timestamp predating the `fantasy.efl.com` pivot).
+  Separately, found live (a user asked why the pipeline wasn't using the
+  official site's own per-player "Matches" breakdown) that
+  `fantasy.efl.com/json/fantasy/live_scores/{round}.json` is ALSO fully
+  public and gives a real per-player, per-MATCH breakdown - including real
+  `minutesPlayed` and real `penaltySaves`, neither available anywhere
+  before - for every real player who played, not just scorers. This
+  replaced `rounds.json`'s events array as `scrape_player_stats.py`'s
+  per-round source entirely (migration `0019` adds `minutes_played`/
+  `penalty_saves` columns). Closed most of what "Known limitations" used to
+  list: Xmins is now a real minutes fraction (not the old
+  `games_played/team_games_played` proxy), appearance points use a real
+  shrunk 60+/1-59-minute split (not a flat "always 60+" assumption), Form's
+  per-round exposure uses real per-round minutes (not a season-wide
+  substitute), and `penalty_save`/`missed_penalty` are priced from real
+  fields (no more event-absence inference). **Verified against real data**:
+  Jarrod Bowen's real season total (64pts/620 real minutes over 5 rounds)
+  independently reconstructed by summing `live_scores` matches DTT's own
+  season-aggregate figure exactly; `capture_actuals.py` now captures real,
+  sane GW5 results (1017 captured, MAE≈2.69, bias≈-0.07) instead of the
+  previous mix of false zeros and incorrectly-blocked real captures.
 
 ## Why this is a separate project
 
@@ -288,9 +321,11 @@ docs/data-and-weights.md's "Known limitations"):
 
 ## Deployment setup (one-time, needs a human)
 
-Same two real steps as dreamteam-projections needed - neither is
-something an AI assistant should do on your behalf (a repo secret and a
-personal access token are both real credentials).
+**Done as of 2026-09-13** - kept below as reference (e.g. for rotating the
+token, or setting up a fresh environment). Same two real steps as
+dreamteam-projections needed - neither is something an AI assistant should
+do on your behalf (a repo secret and a personal access token are both real
+credentials).
 
 1. **GitHub Actions secret** - `.github/workflows/refresh_efl.yml` needs a
    `DATABASE_URL` repo secret before it can run: GitHub repo (`HailMaryV1/

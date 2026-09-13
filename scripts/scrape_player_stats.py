@@ -1,32 +1,57 @@
 """
 scrape_player_stats.py
 -----------------------
-Real per-player stats from fantasy.efl.com's own free, unauthenticated
-JSON - real pivot 2026-09 (see CLAUDE.md Status): DreamTeamTonic's own
-free stats mirror turned out to return genuine zeros for every per-event
-stat across all 3570 real players (confirmed live against the raw API,
-not a scraper bug) - the official site's own json/fantasy/players.json
-and json/fantasy/rounds.json have the real data instead.
+Real per-player stats from fantasy.efl.com's own free, unauthenticated JSON.
+
+Real pivot 2026-09-13 (see CLAUDE.md Status and docs/data-and-weights.md):
+found live that json/fantasy/live_scores/{roundNumber}.json is ALSO fully
+public (no login needed, confirmed by fetching it from a fresh, unauthenticated
+browser session) and gives a genuine per-player, per-MATCH breakdown for
+EVERY real player who played that round - not just ones with a scoring event
+(unlike rounds.json's events array, the previous per-round source) - including
+real minutesPlayed and real penaltySaves, neither of which any previously-used
+source provided anywhere. This replaces rounds.json-derived per-round event
+totals as the per-round source entirely; rounds.json is still used elsewhere
+(scrape_fixtures.py, scrape_club_stats.py) for real match results, just not
+here anymore.
 
 Two real sources, two different real jobs:
-  - players.json: real season-aggregate identity + stats per player
-    (goalsScored, assists, keyPasses, shotsOnTarget, cleanSheets,
-    clearances, blocks, tackles, interceptions, saves, appearances,
-    totalPoints) - written as the gameweek=null row.
-  - rounds.json: real match EVENTS (Goal/YellowCard/RedCard/OwnGoal/
-    Penalty, each with playerId/minute/assistPlayerId) - the only real
-    source for a per-ROUND breakdown, and for 4 stats no aggregate field
-    covers at all: yellow cards, red cards, own goals, and missed
-    penalties (a real "Penalty" event with no same-minute "Goal" for the
-    same player - confirmed live: 0 of 35 real Penalty events this season
-    have a matching Goal, supporting "missed" over "scored").
+  - players.json: real season-aggregate identity (name/team/position/
+    ownership/status/injury) - written as the gameweek=null row's identity
+    columns. Its own aggregate stat fields (goalsScored/assists/etc) are no
+    longer used for the season row's STATS - see below, those are now
+    summed from live_scores instead, for one consistent real source instead
+    of two that could drift apart.
+  - live_scores/{round}.json: real per-player, per-match totals - goals,
+    assists, keyPasses, shotsOnTarget, cleanSheet, clearances, blocks,
+    tackles, interceptions, saves, goalsConceded, yellowCards, redCards,
+    ownGoals, penaltyMisses, penaltySaves, minutesPlayed, and the real
+    official `points` total for that match - written per real round, AND
+    summed into the season-aggregate row (so the aggregate is now a genuine
+    sum of every real round captured, not a second, independently-sourced
+    number that could disagree with the per-round rows).
 
-No real per-player goalsConceded field exists anywhere (only a per-club
-one, via scrape_club_stats.py) - GK/DEF's goals_conceded_per_2 is priced
-from the player's own TEAM's real defensive record instead, computed in
-compute_player_projections.py. No real penalty-save attribution exists
-either (the Penalty event only carries the taker's id, not a saving
-keeper's) - that one stat stays genuinely unpriced.
+This one real pivot closes several real gaps this project has carried since
+Phase 2 (see docs/data-and-weights.md "Known limitations" - now mostly
+resolved):
+  - Real per-match minutes finally exist (`minutesPlayed`) - Xmins no longer
+    needs the season-wide games_played proxy (see
+    compute_player_projections.py's compute_base_xmins_fraction).
+  - `missed_penalty` is now a REAL per-player field (`penaltyMisses`) -
+    no more inferring it from a same-minute-Goal absence on a Penalty event.
+  - `penalty_save` can finally be priced (migration 0019's new
+    `penalty_saves` column) - genuinely no free source had this before.
+  - Every real player who appeared gets a real per-round row, not just
+    scorers/carded players - a quiet 90-minute defensive shift is now
+    visible, not indistinguishable from not playing at all.
+
+No real per-player goalsConceded field existed anywhere before this pivot
+(only a per-club one) - live_scores now gives a real PER-PLAYER
+goalsConceded too, stored on player_stats for completeness/player-page
+display, but compute_player_projections.py's goals_conceded_per_2 pricing
+deliberately keeps using the player's own TEAM's real defensive record
+(conceding is a team outcome a GK/DEF simply inherits by being on the pitch,
+not an individual rate worth its own shrinkage) - unchanged by this pivot.
 
 RUN:
     python scripts/scrape_player_stats.py
@@ -44,31 +69,31 @@ from activity_log import log_event
 
 BASE = "https://fantasy.efl.com/json/fantasy"
 SEASON_DISPLAY = "2026/27"
+TOTAL_REAL_GAMEWEEKS = 42  # real total including playoffs, per fefl/current-gameweek's own totalGameweeksWithPlayoffs (see original Phase 0 research) - the live_scores loop below tries every real round number and simply gets an empty list back for one that hasn't been played yet, so this is just an upper bound, not a guess about how far the season has actually progressed.
 
-# players.json field -> player_stats column. Every one of these is a real
-# stat Fantasy EFL's real scoring rules (migration 0005) price directly.
+# live_scores field -> player_stats column. Every one of these is either a
+# real stat Fantasy EFL's own scoring rules (migration 0005) price directly,
+# or (minutes_played, penalty_saves - migration 0019) newly priceable
+# because of this real pivot.
 FIELD_TO_COLUMN = {
+    "minutesPlayed": "minutes_played",
     "goalsScored": "goals",
     "assists": "assists",
     "keyPasses": "key_passes",
     "shotsOnTarget": "shots_on_target",
-    "cleanSheets": "clean_sheets",
+    "cleanSheet": "clean_sheets",
     "clearances": "clearances",
     "blocks": "blocks",
     "tackles": "tackles",
     "interceptions": "interceptions",
     "saves": "saves",
-    "appearances": "games_played",
-}
-
-# rounds.json event type -> player_stats column, keyed by the taker/scorer
-# (playerId). "Penalty" -> missed_penalties, see module docstring for the
-# real evidence behind that mapping.
-EVENT_TYPE_TO_COLUMN = {
-    "YellowCard": "yellow_cards",
-    "RedCard": "red_cards",
-    "OwnGoal": "own_goals",
-    "Penalty": "missed_penalties",
+    "goalsConceded": "goals_conceded",
+    "yellowCards": "yellow_cards",
+    "redCards": "red_cards",
+    "ownGoals": "own_goals",
+    "penaltyMisses": "missed_penalties",
+    "penaltySaves": "penalty_saves",
+    "points": "total_points",
 }
 
 
@@ -113,46 +138,23 @@ def upsert_players_batch(cur, players, team_ids_by_external):
     return dict(result)
 
 
-def build_round_event_totals(rounds):
-    """Real per-(round, player) event counts, aggregated from every real
-    match event across every real game. Returns
-    {round_number: {player_id_external: {column: count}}} for the 4
-    event-derived stats, plus goals/assists (also derivable this way -
-    used for the Form layer's real recency signal, see
-    compute_player_projections.py)."""
+def build_round_totals(round_number):
+    """Real per-(player) totals for one real round, from live_scores' own
+    real per-match rows - summed across every real row for that player (a
+    double gameweek genuinely gives more than one real match in the same
+    round, and Fantasy EFL's own real rules score every one of them, not an
+    average - see project_stats' own docstring for the same real rule
+    already applied to future-fixture projections). Returns {} for a round
+    that hasn't been played yet (live_scores returns a real, empty list -
+    not an error - for those, confirmed live)."""
+    data = fetch_json(f"live_scores/{round_number}.json")
     totals = {}
-    for round_ in rounds:
-        round_number = round_["roundNumber"]
-        bucket = totals.setdefault(round_number, {})
-        for game in round_.get("games", []):
-            for event in game.get("events", []):
-                player_key = str(event["playerId"])
-                player_bucket = bucket.setdefault(player_key, {})
-                if event["type"] == "Goal":
-                    player_bucket["goals"] = player_bucket.get("goals", 0) + 1
-                    assist_id = event.get("assistPlayerId")
-                    if assist_id:
-                        assist_bucket = bucket.setdefault(str(assist_id), {})
-                        assist_bucket["assists"] = assist_bucket.get("assists", 0) + 1
-                elif event["type"] in EVENT_TYPE_TO_COLUMN:
-                    col = EVENT_TYPE_TO_COLUMN[event["type"]]
-                    player_bucket[col] = player_bucket.get(col, 0) + 1
+    for row in data.get("players", []):
+        player_key = str(row["playerId"])
+        bucket = totals.setdefault(player_key, {col: 0 for col in FIELD_TO_COLUMN.values()})
+        for field, col in FIELD_TO_COLUMN.items():
+            bucket[col] += row.get(field) or 0
     return totals
-
-
-def build_season_event_totals(round_event_totals):
-    """Real season-to-date sums of the 4 event-derived stats (cards/own
-    goals/missed penalties) - players.json has no aggregate field for any
-    of them, so this is the only real source for the season-aggregate row
-    too, not just per-round."""
-    season = {}
-    for round_bucket in round_event_totals.values():
-        for player_key, stats in round_bucket.items():
-            season_bucket = season.setdefault(player_key, {})
-            for col in EVENT_TYPE_TO_COLUMN.values():
-                if col in stats:
-                    season_bucket[col] = season_bucket.get(col, 0) + stats[col]
-    return season
 
 
 def upsert_player_stats_batch(cur, gameweek, entries):
@@ -160,7 +162,7 @@ def upsert_player_stats_batch(cur, gameweek, entries):
     real player_stats columns. Every row in one call shares the same
     gameweek, so one conflict target covers the batch (see migration
     0003's two real unique constraints)."""
-    all_columns = sorted(set(FIELD_TO_COLUMN.values()) | set(EVENT_TYPE_TO_COLUMN.values()) | {"total_points"})
+    all_columns = sorted(set(FIELD_TO_COLUMN.values()) | {"games_played"})
     columns = ["player_id", "season", "gameweek"] + all_columns
     rows = []
     for player_id, stats in entries:
@@ -191,45 +193,59 @@ def main():
             players_by_external = upsert_players_batch(cur, players, team_ids_by_external)
             print(f"{len(players)} real players upserted.", flush=True)
 
-            rounds = fetch_json("rounds.json")
-            round_event_totals = build_round_event_totals(rounds)
-            season_event_totals = build_season_event_totals(round_event_totals)
-
-            # Season-aggregate row: players.json's own real cumulative
-            # stats, plus the 4 event-derived ones no aggregate field
-            # covers (see module docstring).
-            season_entries = []
-            for p in players:
-                player_id = players_by_external.get(str(p["id"]))
-                if player_id is None:
-                    continue
-                stats = {col: p.get(field) for field, col in FIELD_TO_COLUMN.items()}
-                stats["total_points"] = p.get("totalPoints")
-                stats.update(season_event_totals.get(str(p["id"]), {}))
-                season_entries.append((player_id, stats))
-            written = upsert_player_stats_batch(cur, None, season_entries)
-            print(f"Season aggregate: {written} real players", flush=True)
-
-            # Real per-round rows - goals/assists/cards/own-goals/missed-
-            # penalties only (the only stats a real match event can give a
-            # per-round breakdown for - see module docstring for why the
-            # continuous defensive stats stay season-aggregate-only).
+            # Real per-round rows, straight from live_scores - every real
+            # played round gets a real row for every real player who
+            # featured (see module docstring for why this is a genuine
+            # improvement over the old events-only per-round source).
+            # Season aggregate accumulates alongside, as a genuine running
+            # sum of every real round captured this loop - not a second,
+            # independently-sourced number (see module docstring).
+            season_totals = {}
             unresolved_players = set()
-            for round_number, bucket in sorted(round_event_totals.items()):
+            rounds_with_data = 0
+            for round_number in range(1, TOTAL_REAL_GAMEWEEKS + 1):
+                round_totals = build_round_totals(round_number)
+                if not round_totals:
+                    continue
+                rounds_with_data += 1
+
                 round_entries = []
-                for player_key, stats in bucket.items():
+                for player_key, stats in round_totals.items():
                     player_id = players_by_external.get(player_key)
                     if player_id is None:
                         unresolved_players.add(player_key)
                         continue
-                    round_entries.append((player_id, stats))
+                    stats_with_flag = dict(stats)
+                    stats_with_flag["games_played"] = 1 if stats["minutes_played"] > 0 else 0
+                    round_entries.append((player_id, stats_with_flag))
+
+                    season_bucket = season_totals.setdefault(player_id, {col: 0 for col in FIELD_TO_COLUMN.values()})
+                    season_bucket["games_played"] = season_bucket.get("games_played", 0) + stats_with_flag["games_played"]
+                    for col in FIELD_TO_COLUMN.values():
+                        season_bucket[col] += stats[col]
+
                 if round_entries:
                     n = upsert_player_stats_batch(cur, round_number, round_entries)
-                    print(f"GW{round_number}: {n} real player-event rows written", flush=True)
+                    print(f"GW{round_number}: {n} real per-match player rows written", flush=True)
+
+            print(f"{rounds_with_data} real rounds had live_scores data.", flush=True)
+
+            # Season-aggregate row: a genuine sum of every real round
+            # captured above - one for every real active player, even a
+            # genuine zero (never featured this season yet) rather than a
+            # missing row, so downstream code that expects every active
+            # player to have a season_stats row keeps working unchanged.
+            blank_season = {col: 0 for col in FIELD_TO_COLUMN.values()}
+            season_entries = [
+                (player_id, season_totals.get(player_id, blank_season))
+                for player_id in players_by_external.values()
+            ]
+            written = upsert_player_stats_batch(cur, None, season_entries)
+            print(f"Season aggregate: {written} real players (summed from {rounds_with_data} real rounds)", flush=True)
 
             if unresolved_players:
-                log_event(cur, "player_event_unresolved", f"{len(unresolved_players)} real event playerIds had no matching player", details={"playerIds": list(unresolved_players)[:20]})
-                print(f"Warning: {len(unresolved_players)} real event playerIds had no matching player (likely eliminated/non-pool players who still touched the ball).", flush=True)
+                log_event(cur, "player_event_unresolved", f"{len(unresolved_players)} real live_scores playerIds had no matching player", details={"playerIds": list(unresolved_players)[:20]})
+                print(f"Warning: {len(unresolved_players)} real live_scores playerIds had no matching player.", flush=True)
 
         conn.commit()
         print("Done.", flush=True)

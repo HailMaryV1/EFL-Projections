@@ -95,6 +95,11 @@ POSITION_WEIGHTS = {
 # Penalty event only carries the taker's id, never a saving keeper's.
 # appearance/hat_trick_bonus have no source column either - priced via the
 # real tiered tables instead (see project_stats).
+#
+# Real pivot 2026-09-13 (see scrape_player_stats.py's own docstring):
+# fantasy.efl.com's live_scores/{round}.json gives a real per-player
+# penaltySaves count (previously genuinely unpriceable - no free source had
+# it) - penalty_save is now priced like every other counted stat.
 STAT_COLUMNS = {
     "goal": "goals",
     "assist": "assists",
@@ -105,6 +110,7 @@ STAT_COLUMNS = {
     "block": "blocks",
     "interception": "interceptions",
     "save": "saves",
+    "penalty_save": "penalty_saves",
     "clean_sheet_60min": "clean_sheets",
     "yellow_card": "yellow_cards",
     "red_card": "red_cards",
@@ -121,7 +127,7 @@ STAT_COLUMNS = {
 STAT_FIXTURE_MODE = {
     "goal": "attack", "assist": "attack", "shot_on_target": "attack", "key_pass": "attack",
     "clean_sheet_60min": "clean_sheet",
-    "save": "pressure", "tackle": "pressure", "clearance": "pressure", "block": "pressure", "interception": "pressure",
+    "save": "pressure", "penalty_save": "pressure", "tackle": "pressure", "clearance": "pressure", "block": "pressure", "interception": "pressure",
     "yellow_card": "flat", "red_card": "flat", "own_goal": "flat", "missed_penalty": "flat",
 }
 
@@ -382,34 +388,31 @@ def load_all_historical_rows(cur):
     """Every player's season-aggregate row, in one query - batched upfront
     the same way dreamteam-projections learned it had to be (see that
     project's load_all_team_games_played docstring for the real CI
-    timeout this pattern fixes)."""
+    timeout this pattern fixes). Also carries real season minutes_played
+    (2026-09-13 pivot) for compute_base_xmins_fraction - not itself a
+    priced stat, so not part of STAT_COLUMNS, but selected alongside them."""
     cols = sorted(set(STAT_COLUMNS.values()))
     cur.execute(
-        f"select player_id, games_played, {', '.join(cols)} from player_stats where gameweek is null and season = %s",
+        f"select player_id, games_played, minutes_played, {', '.join(cols)} from player_stats where gameweek is null and season = %s",
         (SEASON_DISPLAY,),
     )
     rows = {}
     for row in cur.fetchall():
-        player_id, games_played, *stat_values = row
-        result = {"games_played": games_played or 0}
+        player_id, games_played, minutes_played, *stat_values = row
+        result = {"games_played": games_played or 0, "minutes_played": minutes_played or 0}
         result.update({col: (val or 0) for col, val in zip(cols, stat_values)})
         rows[player_id] = result
     return rows
 
 
 def load_all_form_rows(cur):
-    """Real per-round goal/assist counts, for every player at once. Real,
-    important adaptation from dreamteam-projections' version: a per-round
-    player_stats row here only exists for a round the player had an actual
-    scoring/carded event in (see scrape_player_stats.py - real match
-    events are the only per-round signal that exists, there's no per-round
-    "did they play" flag at all in the free data). A round with NO row is
-    genuinely ambiguous - "didn't play" and "played but didn't score" both
-    look identical - so this is intentionally sparse (only real non-zero
-    evidence), and compute_recent_form_rate below supplies the real
-    per-round EXPOSURE denominator from a different, more reliable source
-    (the team's own real fixture list) rather than trying to infer
-    appearance from this table."""
+    """Real per-round goal/assist counts, for every player at once. Since
+    the 2026-09-13 pivot a per-round player_stats row exists for every
+    real appearance (see scrape_player_stats.py), but this stays scoped to
+    rounds with a real non-zero goal/assist event - compute_recent_form_rate
+    supplies the real per-round EXPOSURE denominator separately, from
+    load_all_minutes_rows, so a round with real minutes but no goal/assist
+    event is correctly treated as "played, scored zero", not skipped."""
     cur.execute(
         "select player_id, gameweek, goals, assists from player_stats "
         "where season = %s and gameweek is not null and (coalesce(goals,0) > 0 or coalesce(assists,0) > 0)",
@@ -421,36 +424,99 @@ def load_all_form_rows(cur):
     return rows_by_player
 
 
-def compute_base_xmins_fraction(games_played, team_games_played):
-    """Real, honest SEASON-WIDE start-rate proxy - the one real signal
-    available without a raw minutes field (see "Known limitations"):
-    games_played / team_games_played. Unlike dreamteam-projections' own
-    version, there is no minutes-per-appearance refinement here at all
-    (no raw minutes exist to compute one from), so this can't distinguish
-    a nailed-on 90-minute starter from a regular late-substitute - both
-    would show the same fraction if they appear equally often. A real,
-    documented coarser signal, not a guess. No shrinkage toward a prior
-    either, same reasoning as dreamteam-projections: early-season
-    volatility in team_games_played is real uncertainty, not something to
-    paper over."""
-    if games_played is None or team_games_played is None or team_games_played <= 0:
+def load_all_minutes_rows(cur):
+    """Every real per-round minutes_played value, for every real
+    appearance this season - possible only since the 2026-09-13 pivot
+    (live_scores gives a real row for every player who actually featured,
+    confirmed live to exclude anyone with 0 minutes - so "a row exists"
+    now means "genuinely played", unambiguously). Used both for
+    compute_appearance_tier_shares' shrinkage evidence and as
+    compute_recent_form_rate's real per-round exposure weight, replacing
+    the season-wide xmins_fraction substitute load_all_form_rows' own
+    docstring used to describe as the best available proxy."""
+    cur.execute(
+        "select player_id, gameweek, minutes_played from player_stats where season = %s and gameweek is not null and minutes_played > 0",
+        (SEASON_DISPLAY,),
+    )
+    rows_by_player = {}
+    for player_id, gameweek, minutes in cur.fetchall():
+        rows_by_player.setdefault(player_id, {})[gameweek] = minutes
+    return rows_by_player
+
+
+MINUTES_PER_GAME = 90.0
+
+
+def compute_base_xmins_fraction(minutes_played, team_games_played):
+    """Real, honest SEASON-WIDE minutes fraction: minutes_played /
+    (team_games_played * 90). Real pivot 2026-09-13 (see
+    scrape_player_stats.py's own docstring): fantasy.efl.com's
+    live_scores/{round}.json gives real per-match minutes for the first
+    time, so this can finally distinguish a nailed-on 90-minute starter
+    from a regular late-substitute (previously both showed the same
+    games_played/team_games_played fraction - a real, documented coarser
+    signal that's now retired). No shrinkage toward a prior either, same
+    reasoning as dreamteam-projections: early-season volatility in
+    team_games_played is real uncertainty, not something to paper over."""
+    if minutes_played is None or team_games_played is None or team_games_played <= 0:
         return None
-    return max(0.0, min(1.0, games_played / team_games_played))
+    return max(0.0, min(1.0, minutes_played / (team_games_played * MINUTES_PER_GAME)))
 
 
-def compute_recent_form_rate(player_form_rows, team_recent_gameweeks, xmins_fraction, col, current_gameweek, historical_prior):
+def compute_position_minutes_tier_averages(cur):
+    """Real per-position share of a real appearance being 60+ minutes vs
+    1-59 minutes (pooled sum, same convention as compute_position_averages)
+    - the shrinkage prior compute_appearance_tier_shares blends toward for
+    a player with few appearances of their own. Possible only since the
+    2026-09-13 pivot: live_scores gives a real row for every real
+    appearance (not just goal/card events), so "how many of a position's
+    real appearances were 60+ minutes" is finally a real, complete
+    question to ask the data."""
+    cur.execute(
+        """
+        select p.position,
+               sum(case when ps.minutes_played >= 60 then 1 else 0 end) as r60,
+               sum(case when ps.minutes_played > 0 and ps.minutes_played < 60 then 1 else 0 end) as r1to59,
+               count(*) as real_appearances
+        from player_stats ps
+        join players p on p.id = ps.player_id
+        where ps.gameweek is not null and ps.season = %s and p.position is not null and ps.minutes_played > 0
+        group by p.position
+        """,
+        (SEASON_DISPLAY,),
+    )
+    averages = {}
+    for position, r60, r1to59, real_appearances in cur.fetchall():
+        if not real_appearances:
+            continue
+        averages[position] = {"p60": (r60 or 0) / real_appearances, "p1to59": (r1to59 or 0) / real_appearances}
+    return averages
+
+
+def compute_appearance_tier_shares(games_exposure, rounds_60plus, rounds_1to59, position_tier_avg):
+    """Real shrunk share of THIS player's own real appearances that were
+    60+ minutes vs 1-59 minutes - replaces the old flat "every real
+    appearance is assumed to be a 60+-minute one" approximation now that
+    live_scores gives real per-match minutes for every real appearance
+    (see scrape_player_stats.py's own pivot docstring). Same shrinkage
+    machinery as every other per-game stat in this module."""
+    prior = position_tier_avg or {"p60": 0.0, "p1to59": 0.0}
+    p60 = historical_shrunk_rate(games_exposure, rounds_60plus, prior.get("p60", 0.0))
+    p1to59 = historical_shrunk_rate(games_exposure, rounds_1to59, prior.get("p1to59", 0.0))
+    return p60, p1to59
+
+
+def compute_recent_form_rate(player_form_rows, player_minutes_rows, team_recent_gameweeks, col, current_gameweek, historical_prior):
     """Real recency-decayed rate for one stat, shrunk toward the player's
-    own season prior. Adapted exposure model (see load_all_form_rows):
-    since there's no real per-round "did they play" flag, the real
-    EXPOSURE denominator for each of the team's own real recent fixtures
-    is the player's own season-wide xmins_fraction (their best real
-    start-rate proxy) rather than a per-round appearance count - the real
-    goal/assist COUNT for a round is used exactly when a real event row
-    exists, zero otherwise (a round with no row is assumed scoreless, not
-    assumed unplayed - the shrinkage term below is what keeps a thin
-    recent sample from overreacting to that assumption)."""
-    if not xmins_fraction:
-        return None
+    own season prior. Real pivot 2026-09-13: the EXPOSURE denominator for
+    each of the team's own real recent fixtures is now that specific
+    round's own real minutes_played/90 (from load_all_minutes_rows) -
+    replacing the season-wide xmins_fraction substitute this function used
+    before live_scores gave a real per-round appearance signal (a round
+    genuinely not played now correctly contributes zero exposure, not the
+    season average). The real goal/assist COUNT for a round is used
+    exactly when a real event row exists, zero otherwise (a round with no
+    event but real minutes played is correctly scoreless, not unplayed)."""
     lookback_start = max(1, current_gameweek - RECENT_FORM_LOOKBACK)
     relevant_gameweeks = [gw for gw in team_recent_gameweeks if lookback_start <= gw < current_gameweek]
     if not relevant_gameweeks:
@@ -460,14 +526,15 @@ def compute_recent_form_rate(player_form_rows, team_recent_gameweeks, xmins_frac
     for gw in relevant_gameweeks:
         weight = RECENT_FORM_DECAY ** (current_gameweek - gw - 1)
         value = player_form_rows.get(gw, {}).get(col, 0)
+        exposure = player_minutes_rows.get(gw, 0) / MINUTES_PER_GAME
         weighted_value_sum += weight * value
-        weighted_exposure_sum += weight * xmins_fraction
+        weighted_exposure_sum += weight * exposure
     if weighted_exposure_sum <= 0:
         return None
     return (weighted_value_sum + RECENT_FORM_K * historical_prior) / (weighted_exposure_sum + RECENT_FORM_K)
 
 
-def compute_form_points_rate(player_form_rows, team_recent_gameweeks, xmins_fraction, position, current_gameweek, historical, games_exposure, position_avg, rules):
+def compute_form_points_rate(player_form_rows, player_minutes_rows, team_recent_gameweeks, position, current_gameweek, historical, games_exposure, position_avg, rules):
     """Form's raw layer value: real recent goal+assist output priced
     through Fantasy EFL's own real point values, in points-per-game. None
     (populated: false) until this player's team has a real recent
@@ -481,7 +548,7 @@ def compute_form_points_rate(player_form_rows, team_recent_gameweeks, xmins_frac
         if stat_points is None:
             continue
         prior = historical_shrunk_rate(games_exposure, historical.get(col, 0), position_avg.get(col, 0.0))
-        rate = compute_recent_form_rate(player_form_rows, team_recent_gameweeks, xmins_fraction, col, current_gameweek, prior)
+        rate = compute_recent_form_rate(player_form_rows, player_minutes_rows, team_recent_gameweeks, col, current_gameweek, prior)
         if rate is None:
             continue
         any_data = True
@@ -489,7 +556,7 @@ def compute_form_points_rate(player_form_rows, team_recent_gameweeks, xmins_frac
     return total if any_data else None
 
 
-def project_stats(rules, position, historical, games_exposure, position_avg, team_fdr_map, xmins_fraction, appearance_tiers, hat_trick_bonus_value, fixtures, team_goals_conceded_rate):
+def project_stats(rules, position, historical, games_exposure, position_avg, team_fdr_map, xmins_fraction, appearance_value_given_played, hat_trick_bonus_value, fixtures, team_goals_conceded_rate):
     """Returns (per_stat, total_points). Every priced stat is summed
     across every real fixture in the window (Fantasy EFL's own real rule:
     a double gameweek earns points from EVERY fixture, not an average of
@@ -498,16 +565,15 @@ def project_stats(rules, position, historical, games_exposure, position_avg, tea
     total_points = 0.0
 
     if xmins_fraction and fixtures:
-        appearance_60_value = tiered_lookup(60, appearance_tiers)
-        # Real, documented approximation (see "Known limitations"): with no
-        # raw minutes field, every real appearance is assumed to be a
-        # 60+-minute one when pricing appearance points - genuinely
-        # unknowable whether a given appearance was a full match or a late
-        # cameo without minutes data. Likely a slight overstatement of
-        # value for a pure impact-substitute, an accepted real gap.
+        # Real pivot 2026-09-13: appearance_value_given_played is a real,
+        # shrunk blend of the 60+/1-59-minute tiers (see
+        # compute_appearance_tier_shares) - genuinely possible now that
+        # live_scores gives real per-match minutes for every real
+        # appearance, replacing the old flat "every appearance is
+        # assumed 60+ minutes" approximation this line used to apply.
         appearance_expected = xmins_fraction * len(fixtures)
-        total_points += appearance_expected * appearance_60_value
-        per_stat["appearance"] = {"expected_count": round(appearance_expected, 3), "points": round(appearance_expected * appearance_60_value, 2)}
+        total_points += appearance_expected * appearance_value_given_played
+        per_stat["appearance"] = {"expected_count": round(appearance_expected, 3), "points": round(appearance_expected * appearance_value_given_played, 2)}
 
     for stat, col in STAT_COLUMNS.items():
         stat_points = points_for(rules, stat, position)
@@ -629,6 +695,9 @@ def main():
         layer_weights = load_layer_weights(cur)
         rating_anchors = load_rating_anchors(cur)
         position_averages = compute_position_averages(cur)
+        position_minutes_tier_averages = compute_position_minutes_tier_averages(cur)
+        appearance_60_value = tiered_lookup(60, appearance_tiers)
+        appearance_1_value = tiered_lookup(1, appearance_tiers)
 
         cur.execute("select coalesce(max(revision), 0) + 1 from algorithm_versions")
         revision = cur.fetchone()[0]
@@ -648,6 +717,7 @@ def main():
 
         historical_rows = load_all_historical_rows(cur)
         form_rows_map = load_all_form_rows(cur)
+        minutes_rows_map = load_all_minutes_rows(cur)
         team_gameweeks_map = load_all_team_gameweeks(cur)
 
         cur.execute("select team_id, games_played from club_stats where gameweek is null")
@@ -682,15 +752,24 @@ def main():
         for player_id, position, team_id in players:
             historical = historical_rows.get(player_id)
             games_exposure = historical.get("games_played", 0) if historical else 0
+            minutes_played = historical.get("minutes_played", 0) if historical else 0
             team_games_played = team_games_played_map.get(team_id, 0)
-            xmins_fraction = compute_base_xmins_fraction(games_exposure, team_games_played)
+            xmins_fraction = compute_base_xmins_fraction(minutes_played, team_games_played)
             player_form_rows = form_rows_map.get(player_id, {})
+            player_minutes_rows = minutes_rows_map.get(player_id, {})
             team_recent_gameweeks = team_gameweeks_map.get(team_id, [])
             form_raw = compute_form_points_rate(
-                player_form_rows, team_recent_gameweeks, xmins_fraction, position, current_gameweek,
+                player_form_rows, player_minutes_rows, team_recent_gameweeks, position, current_gameweek,
                 historical, games_exposure, position_averages.get(position, {}), rules,
             )
             team_goals_conceded_rate = team_defense_rates.get(team_id)
+
+            rounds_60plus = sum(1 for m in player_minutes_rows.values() if m >= 60)
+            rounds_1to59 = sum(1 for m in player_minutes_rows.values() if m < 60)
+            p60, p1to59 = compute_appearance_tier_shares(
+                games_exposure, rounds_60plus, rounds_1to59, position_minutes_tier_averages.get(position),
+            )
+            appearance_value_given_played = p60 * appearance_60_value + p1to59 * appearance_1_value
 
             for horizon in HORIZONS:
                 fixtures = window_fixtures_cache.get((team_id, horizon), [])
@@ -700,7 +779,7 @@ def main():
 
                 per_stat, total_points = project_stats(
                     rules, position, historical, games_exposure, position_averages.get(position, {}),
-                    team_fdr_map, xmins_fraction, appearance_tiers, hat_trick_bonus_value, fixtures, team_goals_conceded_rate,
+                    team_fdr_map, xmins_fraction, appearance_value_given_played, hat_trick_bonus_value, fixtures, team_goals_conceded_rate,
                 )
                 per_layer, rating = project_layers(
                     position, horizon, fixtures, team_fdr_map, team_names, xmins_fraction, form_raw,

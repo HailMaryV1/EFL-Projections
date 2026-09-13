@@ -29,6 +29,34 @@ current, real endpoint table - the DreamTeamTonic-based version is gone,
 not kept as a fallback (one verified-real source beats two, one of which
 was silently wrong).
 
+## Real pivot, 2026-09-13: live_scores replaces rounds.json for per-round player stats
+
+Found live (a user pointed at the official site's own per-player "Matches"
+breakdown and asked why the pipeline wasn't using it) that
+`fantasy.efl.com/json/fantasy/live_scores/{round}.json` is ALSO fully
+public - no login needed, confirmed by fetching it from a fresh,
+unauthenticated browser session - and gives a genuine per-player,
+per-MATCH breakdown for every real player who played that round, not just
+ones with a scoring event: real `minutesPlayed`, real `penaltySaves`, and
+the real official `points` total for that match, alongside every other
+priced stat. This replaced `rounds.json`'s events array as
+`scrape_player_stats.py`'s per-round source entirely (`rounds.json` is
+still used by `scrape_fixtures.py`/`scrape_club_stats.py` for real match
+results). This single pivot closed most of what "Known limitations" used
+to list as permanent gaps - see that section below for what's left.
+
+It also uncovered and fixed two real bugs that were silently deflating
+every player projection and breaking the accuracy pipeline:
+`scrape_club_stats.py` was double-counting `games_played`/goals/etc for
+rounds 1-3 because `rounds.json` returns a genuine duplicate (empty)
+round object for those rounds, which inflated `team_games_played` and
+suppressed every player's Xmins-multiplied stat; and thousands of stale,
+all-zero `player_stats` rows from the original (pre-pivot) DreamTeamTonic
+scraper had never been cleaned up, so `capture_actuals.py` was copying
+that stale `0.00` in as a real GW5 result for players who'd actually
+played. Both are fixed; the stale rows were deleted (identified by their
+shared real `created_at` timestamp, predating the fantasy.efl.com pivot).
+
 ## The five layers
 
 Every player's rating is built from five independently-weighted layers,
@@ -39,8 +67,8 @@ layers are actually populated.
 
 | # | Layer | What it answers | Status |
 |---|---|---|---|
-| 1 | Xmins | Will this player actually play? | Built - season-wide appearance-rate proxy (`appearances / team_games_played`), NOT minutes-weighted like Dream Team's (see Known limitations) |
-| 2 | Form | How has this player performed recently, decay-weighted? | Built - real per-round goal/assist counts, derived from `rounds.json`'s real match events (see Known limitations for the real per-round exposure adaptation this needed) |
+| 1 | Xmins | Will this player actually play? | Built - real season-wide minutes fraction (`minutes_played / (team_games_played * 90)`, from `live_scores`) - minutes-weighted like Dream Team's, since the 2026-09-13 pivot |
+| 2 | Form | How has this player performed recently, decay-weighted? | Built - real per-round goal/assist counts, with each real round's own real minutes/90 as the exposure weight (since the 2026-09-13 pivot - see Known limitations for what this replaced) |
 | 3 | Fixture Quantity | How many fixtures fall in this horizon window? | Built - real fixtures per division; no cup fixtures ever count (regular EFL season only) |
 | 4 | Fixture Quality | How hard are those fixtures? | Built - real official `fdrHome`/`fdrAway` ratings for every club (`teams.fdr_home`/`fdr_away`) |
 | 5 | Live Odds | What does the real betting market say, if it's posted yet? | **Not yet populated** - the one real source found (DreamTeamTonic's `fantasy-efl/tools/market-odds`) is Premium-gated; will be built once a real Premium login exists to test against |
@@ -85,9 +113,10 @@ Two rules are genuinely tiered (migration `0006_tiered_scoring.sql`):
 
 - **Appearance points** - +1 for 1-59 real minutes, +2 for 60+, mutually
   exclusive (not additive like Dream Team's own appearance rule).
-  `appearance_points_tiers` seeded (0,0)/(1,1)/(60,2). Since no raw minutes
-  field exists (see Known limitations), the engine assumes every real
-  appearance is a 60+-minute one - a documented approximation.
+  `appearance_points_tiers` seeded (0,0)/(1,1)/(60,2). Since the 2026-09-13
+  pivot, the engine uses a real shrunk blend of this player's own real
+  60+/1-59-minute split (`compute_appearance_tier_shares`) instead of
+  assuming every real appearance is a 60+-minute one.
 - **Hat-trick bonus** - +5 for 3+ real goals in a match, on top of normal
   per-goal points, via a real closed-form Poisson tail probability
   (`probability_at_least(3, lambda)`) applied to each fixture's own
@@ -97,19 +126,22 @@ Two rules are genuinely tiered (migration `0006_tiered_scoring.sql`):
 scoring table already prices raw counted events directly, and (after the
 pivot above) the real data source now actually provides them.
 
-**Cards, own goals, and missed penalties ARE priced** (a real gap in the
-original DreamTeamTonic-based plan, closed by the pivot): derived from real
-match events in `rounds.json` (`YellowCard`/`RedCard`/`OwnGoal`/`Penalty`),
-aggregated per player per round by `scrape_player_stats.py`. See Known
-limitations for the real evidence behind treating a `Penalty` event as
-"missed" rather than "scored."
+**Cards, own goals, missed penalties, and penalty saves ARE priced**: since
+the 2026-09-13 pivot, `live_scores/{round}.json` gives real per-player,
+per-match `yellowCards`/`redCards`/`ownGoals`/`penaltyMisses`/`penaltySaves`
+directly - no inference needed any more (previously `missed_penalty` had to
+be inferred from a `Penalty` event in `rounds.json` with no same-minute
+`Goal` for the same player, and `penalty_save` was entirely unpriced - see
+Known limitations for what's left).
 
-**`goals_conceded_per_2` has no real per-player source** - `players.json`
-gives real `cleanSheets` per player but no per-player goals-conceded count.
-Priced from the player's own TEAM's real defensive record instead
-(`compute_player_projections.py`'s dedicated `team_goals_conceded_rate`
-step) - arguably more correct anyway, since conceding is fundamentally a
-team outcome a GK/DEF inherits by being on the pitch, not a fallback guess.
+**`goals_conceded_per_2` still has no real per-player pricing source used**
+- `live_scores` does give a real per-player `goalsConceded` now (stored on
+`player_stats` for completeness/player-page display), but the engine still
+deliberately prices this stat from the player's own TEAM's real defensive
+record instead (`compute_player_projections.py`'s dedicated
+`team_goals_conceded_rate` step) - conceding is fundamentally a team
+outcome a GK/DEF inherits by being on the pitch, not an individual rate
+worth its own shrinkage.
 
 ### Club scoring
 
@@ -129,35 +161,20 @@ note above for why).
 |---|---|---|---|
 | `fantasy.efl.com/json/fantasy/competitions.json` | The real competitionId -> division mapping: 10=Championship, 11=League One, 12=League Two | Competition resolution in every other script | Static, rarely changes |
 | `fantasy.efl.com/json/fantasy/squads.json` | All 72 real clubs: `id`, `name`, `shortName`, `abbreviation`, real `fdrHome`/`fdrAway`, `leaguePosition`, `last3Form`, `totalPoints`/`averagePoints`/`percentSelected`, badge/colours | `teams` | One real call returns every division at once (no per-competition filtering needed, unlike the DreamTeamTonic version this replaced) |
-| `fantasy.efl.com/json/fantasy/rounds.json` | All 42 real gameweeks: each with real `games` (home/away by squadId, real score, real status) AND real per-game `events` (`Goal`/`YellowCard`/`RedCard`/`OwnGoal`/`Penalty`, each with `playerId`/`minute`/`assistPlayerId`) | `fixtures` (from `games`); real per-round `player_stats`/`club_stats` rows (derived from `events`/results by `scrape_player_stats.py`/`scrape_club_stats.py`) | The single richest source in this project - genuine match-event data, not an aggregate mirror. A `Penalty` event carries only the taker's `playerId` - confirmed live that 0 of 35 real `Penalty` events this season have a same-minute `Goal` for the same player, supporting "missed penalty" over "scored" (a scored one would show as `Goal` instead) |
-| `fantasy.efl.com/json/fantasy/players.json` | Real season-aggregate stats for ~3570 players: identity, `position`, `squadId`, real `goalsScored`/`assists`/`keyPasses`/`shotsOnTarget`/`cleanSheets`/`clearances`/`blocks`/`tackles`/`interceptions`/`saves`/`appearances`, `percentSelected`, `status`/`injuryDetails`/`suspensionDetails`, real `totalPoints`/`averagePoints`, `lastThree` (real points for the last 3 real rounds) | `players`, season-aggregate `player_stats` | The real per-stat source the DreamTeamTonic mirror turned out not to have - see the pivot note |
+| `fantasy.efl.com/json/fantasy/rounds.json` | All 42 real gameweeks: each with real `games` (home/away by squadId, real score, real status) | `fixtures` (from `games`); real per-round `club_stats` (derived from match results by `scrape_club_stats.py`) | Returns a genuine duplicate (empty) round object for rounds 1-3 (see the 2026-09-13 pivot note above) - `build_round_and_season_stats` groups by round number before aggregating to avoid double-counting. No longer used for per-player stats (see `live_scores` below) |
+| `fantasy.efl.com/json/fantasy/players.json` | Real identity for ~3570 players: name, `position`, `squadId`, `percentSelected`, `status`/`injuryDetails`/`suspensionDetails` | `players` | Its own aggregate stat fields (`goalsScored`/`assists`/etc) are no longer used - see `live_scores` below |
+| `fantasy.efl.com/json/fantasy/live_scores/{round}.json` | Real per-player, per-MATCH totals for every real player who played that round (not just scorers): `minutesPlayed`, `points` (the real official fantasy total for that match), `goalsScored`/`assists`/`keyPasses`/`shotsOnTarget`/`cleanSheet`/`clearances`/`blocks`/`tackles`/`interceptions`/`saves`/`goalsConceded`/`yellowCards`/`redCards`/`ownGoals`/`penaltyMisses`/`penaltySaves`/`hatTricks` | Real per-round `player_stats` rows AND the season-aggregate row (summed across every real round captured) - `scrape_player_stats.py` | Found 2026-09-13 (a user pointed at the official site's own per-player "Matches" tab and asked why it wasn't being used). Fully public, no login. Returns an empty `players` list for a round not yet played - a real, valid response, not an error. A double gameweek genuinely gives more than one real row per player per round; summed, matching Fantasy EFL's own real "every fixture counts" rule |
 
 ## Known limitations
 
-- **No raw per-match minutes-played field** anywhere in the free data -
-  only `appearances` (a season-wide count). Xmins uses
-  `appearances / team_games_played` as a season-wide start-rate proxy - it
-  can't distinguish "always starts and plays 90" from "always starts but
-  subbed off at 60." Appearance points assume every real appearance is a
-  60+-minute one for the same reason - both real, documented gaps, not
-  silent guesses.
-- **No real per-round "did this player play" flag** - only real per-round
-  goal/assist/card/own-goal/missed-penalty EVENTS exist (from `rounds.json`
-  - a round with no event row is genuinely ambiguous between "didn't play"
-  and "played but did nothing notable"). Form's recency calculation works
-  around this by using the player's own season-wide Xmins fraction as the
-  real per-round EXPOSURE weight (rather than a nonexistent per-round
-  appearance flag), applied across every real gameweek the player's TEAM
-  had a fixture in (a fully real, known fact from `fixtures`) - the real
-  goal/assist COUNT for a round is used exactly when a real event exists,
-  zero otherwise. Club Form has no equivalent gap - a club's real
-  `games_played` per round is always a known fact, not a proxy.
-- **No real per-player goals-conceded field** - see "Scoring model" above;
-  priced from the player's own team's real defensive record instead.
-- **No real penalty-save attribution** - the real `Penalty` event only
-  carries the taker's `playerId`, never a saving goalkeeper's. This one
-  stat (`penalty_save`, a real `scoring_rules` row) stays genuinely
-  unpriced - a documented gap, not guessed.
+Mostly resolved by the 2026-09-13 `live_scores` pivot (see that note
+above) - what's left:
+
+- **No real per-player goals-conceded PRICING** - `live_scores` does give a
+  real per-player `goalsConceded` now (stored for completeness), but the
+  engine still deliberately prices this stat from the player's own team's
+  real defensive record instead (see "Scoring model" above) - a design
+  choice, not a data gap.
 - **No real "4+ goal games" field** for clubs - `club_stats.
   four_plus_goal_games` is computed directly from real match scores in
   `scrape_club_stats.py` (a team's own goals in a real completed game
