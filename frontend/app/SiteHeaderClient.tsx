@@ -43,6 +43,12 @@ const CompareIcon: NavIcon = ({ className }) => (
     <path d="M7 4v13M4 14l3 3 3-3M17 20V7M14 10l3-3 3 3" />
   </svg>
 );
+const MySquadIcon: NavIcon = ({ className }) => (
+  <svg {...iconProps} className={className}>
+    <circle cx="12" cy="8" r="3.2" />
+    <path d="M5 20c0-3.5 3-6 7-6s7 2.5 7 6" />
+  </svg>
+);
 const AdminIcon: NavIcon = ({ className }) => (
   <svg {...iconProps} className={className}>
     <path d="M12 3l7 3v5c0 5-3 8.5-7 10-4-1.5-7-5-7-10V6z" />
@@ -60,6 +66,7 @@ const ANALYSE_LINKS: { href: string; label: string; icon: NavIcon }[] = [
   { href: "/compare", label: "Player Face-Off", icon: CompareIcon },
 ];
 const BUILD_LINKS: { href: string; label: string; icon: NavIcon }[] = [
+  { href: "/my-squad", label: "My Squad", icon: MySquadIcon },
   { href: "/best-squad", label: "HM Best Squad", icon: SquadIcon },
   { href: "/top-picks", label: "HM Top Picks", icon: TopPicksIcon },
 ];
