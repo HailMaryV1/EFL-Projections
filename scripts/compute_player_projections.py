@@ -560,9 +560,18 @@ def project_stats(rules, position, historical, games_exposure, position_avg, tea
     """Returns (per_stat, total_points). Every priced stat is summed
     across every real fixture in the window (Fantasy EFL's own real rule:
     a double gameweek earns points from EVERY fixture, not an average of
-    them - confirmed from the official Game Guidelines)."""
+    them - confirmed from the official Game Guidelines).
+
+    Real addition 2026-09-13: `per_stat["fixtures"]` also carries each real
+    fixture's own individual points contribution (the exact same lambdas
+    already computed below, just also accumulated per-fixture instead of
+    only summed into the horizon-wide total) - mirrors
+    compute_club_projections.py's own `per_stat["fixtures"]`, and is what
+    lets the frontend show a genuine isolated number for any single real
+    gameweek in the window, not just the whole horizon's summed total."""
     per_stat = {}
     total_points = 0.0
+    fixture_points = {f["id"]: 0.0 for f in fixtures}
 
     if xmins_fraction and fixtures:
         # Real pivot 2026-09-13: appearance_value_given_played is a real,
@@ -574,6 +583,9 @@ def project_stats(rules, position, historical, games_exposure, position_avg, tea
         appearance_expected = xmins_fraction * len(fixtures)
         total_points += appearance_expected * appearance_value_given_played
         per_stat["appearance"] = {"expected_count": round(appearance_expected, 3), "points": round(appearance_expected * appearance_value_given_played, 2)}
+        per_fixture_appearance_points = xmins_fraction * appearance_value_given_played
+        for fixture in fixtures:
+            fixture_points[fixture["id"]] += per_fixture_appearance_points
 
     for stat, col in STAT_COLUMNS.items():
         stat_points = points_for(rules, stat, position)
@@ -591,13 +603,16 @@ def project_stats(rules, position, historical, games_exposure, position_avg, tea
             factor = fixture_factor_from_fdr(mode, opponent_fdr)
             lam = shrunk_rate * factor * (xmins_fraction or 0.0)
             expected_total += lam
+            fixture_points[fixture["id"]] += lam * stat_points
             if stat == "goal":
                 # Real bonus on top of normal per-goal points - "3 or more
                 # goals scored = +5" - via the same closed-form Poisson
                 # tail already used for the frontend's own 2+ goals stat,
                 # reusing this fixture's own just-computed goal lambda
                 # rather than a second, separately-fitted rate.
-                hat_trick_total += probability_at_least(3, lam) * hat_trick_bonus_value
+                hat_trick_this_fixture = probability_at_least(3, lam) * hat_trick_bonus_value
+                hat_trick_total += hat_trick_this_fixture
+                fixture_points[fixture["id"]] += hat_trick_this_fixture
 
         per_stat[stat] = {"expected_count": round(expected_total, 3), "points": round(expected_total * stat_points, 2)}
         total_points += expected_total * stat_points
@@ -617,9 +632,22 @@ def project_stats(rules, position, historical, games_exposure, position_avg, tea
         for fixture in fixtures:
             opponent_fdr = resolve_opponent_fdr(team_fdr_map, fixture)
             factor = fixture_factor_from_fdr("pressure", opponent_fdr)
-            expected_total += team_goals_conceded_rate * factor * (xmins_fraction or 0.0)
+            contribution = team_goals_conceded_rate * factor * (xmins_fraction or 0.0)
+            expected_total += contribution
+            fixture_points[fixture["id"]] += contribution * gc_points
         per_stat["goals_conceded_per_2"] = {"expected_count": round(expected_total, 3), "points": round(expected_total * gc_points, 2)}
         total_points += expected_total * gc_points
+
+    if fixtures:
+        per_stat["fixtures"] = [
+            {
+                "gameweek": fixture["gameweek"],
+                "opponent_team_id": fixture["opponent_team_id"],
+                "is_home": fixture["is_home"],
+                "total_points": round(fixture_points[fixture["id"]], 2),
+            }
+            for fixture in fixtures
+        ]
 
     return per_stat, total_points
 

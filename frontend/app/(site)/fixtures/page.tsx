@@ -76,8 +76,16 @@ export default async function FixturesPage({ searchParams }: { searchParams: Pro
   // current gameweek (well past PostgREST's 1000-row cap - same real bug
   // already found on Projected Points).
   const [{ data: clubProjRows }, projRows] = await Promise.all([
+    // Real bug fix: horizon=1's own per_stat.fixtures array only ever
+    // contains the CURRENT gameweek's real fixture(s) - selecting any
+    // other real gameweek (past or future) found nothing and showed "not
+    // enough data" even though the model has a real projection for it.
+    // horizon=5 is the widest real window this engine computes (see
+    // compute_club_projections.py's own HORIZONS) and its fixtures array
+    // is a real superset - still one genuine entry per real fixture, not
+    // summed - so it covers every real gameweek this page can navigate to.
     latestClubVersionId && teamIds.length
-      ? supabase.from("club_projections").select("team_id, per_stat").eq("horizon", 1).eq("algorithm_version_id", latestClubVersionId).in("team_id", teamIds)
+      ? supabase.from("club_projections").select("team_id, per_stat").eq("horizon", 5).eq("algorithm_version_id", latestClubVersionId).in("team_id", teamIds)
       : Promise.resolve({ data: [] }),
     latestPlayerVersionId && teamIds.length
       ? fetchAllRows<ProjRow>((from, to) =>
