@@ -149,6 +149,40 @@ to read this section alone and know what's real.
         Team's XI/Club-picks split) - `lib/squadBuilder.ts` is a real,
         documented greedy heuristic (no budget to trade off, just a
         max-2-per-club cap), formation tabs for all 3 real formations.
+        Switches by GAMEWEEK, not horizon, since 2026-09-14 (real user
+        request: "I should be able to switch to next week's best
+        selections - selecting by horizons doesn't really mean much in
+        EFL Fantasy as you can change every player every week so you're
+        not trying to project too far ahead"). Correct, and a genuine
+        difference from dreamteam-projections: Fantasy EFL has no budget
+        and no squad carry-over, so a multi-week horizon has little
+        decision value - what a manager needs is "best XI this round" and
+        "best XI next round", each on its own. Needed three real changes
+        beyond the tabs: (1) the engines now anchor at several START
+        gameweeks, not just the current one (PLAYER_LOOKAHEAD_GAMEWEEKS /
+        CLUB_LOOKAHEAD_GAMEWEEKS = 3) - the current gameweek keeps the
+        full horizon set that the other pages read, each future one gets
+        horizon=1 only, and only the fixture window differs (form, xmins
+        and historical rates are all necessarily "as of now" for every
+        start gameweek, since no future result exists). A team with a real
+        blank gets no row at all rather than a zero-point entry - GW7 has
+        24 real fixtures where GW6 has 36, so its pool is honestly
+        smaller (2428 players vs 3573). (2) freeze_predictions.py and
+        freeze_club_predictions.py were `where horizon = 1` with NO
+        gameweek filter, which was correct only while exactly one
+        gameweek existed - unguarded, they would have frozen GW6/GW7's
+        forecast a week or two early, permanently (`on conflict do
+        nothing` means the better, closer-in projection could never
+        replace it), silently poisoning every future accuracy number.
+        Both now freeze the minimum gameweek present, which IS the
+        current one. (3) /best-squad, /top-picks and the homepage all
+        took an UNSORTED `[0]` off a Set of gameweeks - fine with one
+        gameweek, a coin-flip with three. All sorted now.
+        Verified live: GW5 77.9pts GK-3-2-1 (unchanged from before the
+        change), GW6 62.3pts GK-2-2-2, GW7 67.3pts GK-2-3-1 - genuinely
+        re-optimised per gameweek, different formations, not one squad
+        relabelled. Freeze re-run after the engine change: still only
+        GW5 frozen, no future week leaked in.
       - `/top-picks` - shareable Top 5 card, downloadable via
         `html-to-image` (ported from Dream Team's own pattern).
       - `/compare` - Player Face-Off, real per-horizon/season/ownership

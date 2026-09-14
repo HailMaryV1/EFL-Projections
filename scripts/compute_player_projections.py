@@ -65,6 +65,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from env_utils import db_connect  # noqa: E402
 
 HORIZONS = (1, 2, 3, 5)
+
+# Real user request 2026-09-14: "I should be able to switch to next
+# week's best selections - at the moment I can only select by horizons
+# which doesn't really mean much in EFL Fantasy as you can change every
+# player every week so you're not trying to project too far ahead."
+#
+# Correct, and it's a genuine difference from dreamteam-projections:
+# Fantasy EFL has no transfer budget and no squad carry-over, so a
+# multi-gameweek horizon has little decision value here - what a manager
+# actually needs is "who is best THIS week" and "who is best NEXT week",
+# each on its own.
+#
+# So the engine now anchors at several START gameweeks, not just the
+# current one. The current gameweek keeps the full HORIZONS set (the
+# Projected Points / player / compare pages still read those); each
+# future start gameweek gets horizon=1 only, which is the single-gameweek
+# number the week-by-week pages actually want. Nothing else differs
+# between them - form, xmins and historical rates are all "as of now" for
+# every start gameweek, because no future result exists to use instead;
+# only the fixture window moves.
+PLAYER_LOOKAHEAD_GAMEWEEKS = 3
 SEASON_DISPLAY = "2026/27"  # must match scrape_player_stats.py's own SEASON_DISPLAY
 
 SHRINKAGE_GAMES = 10.0  # same proven constant dreamteam-projections uses for every historical-rate shrinkage - a real, named football-analytics prior (roughly a third of a season), not measured from this project's own still-thin sample.
@@ -762,10 +783,16 @@ def main():
         team_names = dict(cur.fetchall())
 
         team_ids = sorted({team_id for _, _, team_id in players})
+        # Start gameweeks, earliest first. The first IS the real current
+        # gameweek - freeze_predictions.py relies on that (it freezes the
+        # minimum gameweek present, so a future week is never frozen early).
+        start_gameweeks = [current_gameweek + offset for offset in range(PLAYER_LOOKAHEAD_GAMEWEEKS)]
+        horizons_for = lambda start_gw: HORIZONS if start_gw == current_gameweek else (1,)
         window_fixtures_cache = {
-            (team_id, horizon): fetch_window_fixtures(cur, team_id, current_gameweek, horizon)
+            (team_id, start_gw, horizon): fetch_window_fixtures(cur, team_id, start_gw, horizon)
             for team_id in team_ids
-            for horizon in HORIZONS
+            for start_gw in start_gameweeks
+            for horizon in horizons_for(start_gw)
         }
 
         # Every projection row computed in Python first, written in ONE
@@ -799,21 +826,27 @@ def main():
             )
             appearance_value_given_played = p60 * appearance_60_value + p1to59 * appearance_1_value
 
-            for horizon in HORIZONS:
-                fixtures = window_fixtures_cache.get((team_id, horizon), [])
-                if not fixtures:
-                    no_fixtures += 1
-                    continue
+            for start_gw in start_gameweeks:
+                for horizon in horizons_for(start_gw):
+                    fixtures = window_fixtures_cache.get((team_id, start_gw, horizon), [])
+                    # A real blank gameweek for this team (EFL rounds are
+                    # genuinely uneven - GW7 has 24 real fixtures where GW6
+                    # has 36), so no row is written at all. The week-by-week
+                    # pages then honestly show a smaller pool for that
+                    # gameweek rather than a zero-point player.
+                    if not fixtures:
+                        no_fixtures += 1
+                        continue
 
-                per_stat, total_points = project_stats(
-                    rules, position, historical, games_exposure, position_averages.get(position, {}),
-                    team_fdr_map, xmins_fraction, appearance_value_given_played, hat_trick_bonus_value, fixtures, team_goals_conceded_rate,
-                )
-                per_layer, rating = project_layers(
-                    position, horizon, fixtures, team_fdr_map, team_names, xmins_fraction, form_raw,
-                    layer_weights.get((horizon, position), {}), rating_anchors,
-                )
-                rows.append((player_id, current_gameweek, horizon, algorithm_version_id, round(total_points, 2), rating, json.dumps(per_stat), json.dumps(per_layer)))
+                    per_stat, total_points = project_stats(
+                        rules, position, historical, games_exposure, position_averages.get(position, {}),
+                        team_fdr_map, xmins_fraction, appearance_value_given_played, hat_trick_bonus_value, fixtures, team_goals_conceded_rate,
+                    )
+                    per_layer, rating = project_layers(
+                        position, horizon, fixtures, team_fdr_map, team_names, xmins_fraction, form_raw,
+                        layer_weights.get((horizon, position), {}), rating_anchors,
+                    )
+                    rows.append((player_id, start_gw, horizon, algorithm_version_id, round(total_points, 2), rating, json.dumps(per_stat), json.dumps(per_layer)))
 
         execute_values(
             cur,

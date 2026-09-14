@@ -17,7 +17,13 @@ export default async function TopPicksPage({ searchParams }: { searchParams: Pro
   const { data: gameweekRows } = latestVersionId
     ? await supabase.from("projections").select("gameweek").eq("horizon", horizon).eq("algorithm_version_id", latestVersionId)
     : { data: [] };
-  const gameweek = Array.from(new Set((gameweekRows ?? []).map((r) => r.gameweek)))[0] ?? null;
+  // Sorted, and the minimum taken deliberately: that is the real CURRENT
+  // gameweek. Until 2026-09-14 the engine wrote exactly one gameweek so an
+  // unsorted [0] was always right; it now also writes the next two (see
+  // compute_player_projections.py's PLAYER_LOOKAHEAD_GAMEWEEKS), and an
+  // unsorted [0] would be whichever row Postgres returned first - this page
+  // could silently show next week's numbers as if they were this week's.
+  const gameweek = Array.from(new Set((gameweekRows ?? []).map((r) => r.gameweek))).sort((a, b) => a - b)[0] ?? null;
 
   type TeamJoin = { name: string; competition: string; abbreviation: string; background_color: string; text_color: string } | null;
   type PlayerJoin = { full_name: string; position: string; teams: TeamJoin };

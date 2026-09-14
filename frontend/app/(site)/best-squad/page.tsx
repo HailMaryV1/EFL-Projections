@@ -5,20 +5,34 @@ import { buildBestSquad, buildBestClubPicks, type SquadCandidate, type ClubCandi
 import TeamBadge from "../../TeamBadge";
 import SquadTabs from "./SquadTabs";
 
-const HORIZON_LABELS: Record<string, string> = { "1": "This gameweek", "2": "Next 2 gameweeks", "3": "Next 3 gameweeks", "5": "Next 5 gameweeks" };
+// Real user request 2026-09-14: this page used to switch by HORIZON
+// (this GW / next 2 / next 3 / next 5), which carries little decision
+// value in Fantasy EFL - there's no budget and no squad carry-over, so
+// you rebuild from scratch every week and never need to plan several
+// weeks out. It now switches by GAMEWEEK instead, always at horizon=1,
+// so each tab answers the question a manager actually has: "who is the
+// best XI for THIS round". The engine writes the extra start gameweeks
+// (see compute_player_projections.py's PLAYER_LOOKAHEAD_GAMEWEEKS).
+const HORIZON = 1;
 
-export default async function BestSquadPage({ searchParams }: { searchParams: Promise<{ horizon?: string }> }) {
+export default async function BestSquadPage({ searchParams }: { searchParams: Promise<{ gameweek?: string }> }) {
   const params = await searchParams;
-  const horizon = params.horizon && params.horizon !== "1" ? Number(params.horizon) : 1;
   const supabase = await createAuthServerClient();
 
   const { data: latestVersionRow } = await supabase.from("projections").select("algorithm_version_id").order("algorithm_version_id", { ascending: false }).limit(1).maybeSingle();
   const latestVersionId = latestVersionRow?.algorithm_version_id;
 
   const { data: gameweekRows } = latestVersionId
-    ? await supabase.from("projections").select("gameweek").eq("horizon", horizon).eq("algorithm_version_id", latestVersionId)
+    ? await supabase.from("projections").select("gameweek").eq("horizon", HORIZON).eq("algorithm_version_id", latestVersionId)
     : { data: [] };
-  const gameweek = Array.from(new Set((gameweekRows ?? []).map((r) => r.gameweek)))[0] ?? null;
+  // SORTED, unlike the previous `[0]` off an unordered Set. That was safe
+  // only while the engine wrote exactly one gameweek - with several, an
+  // unsorted [0] is whichever row Postgres happened to return first, so
+  // the page could silently open on a different week between loads.
+  const gameweeks = Array.from(new Set((gameweekRows ?? []).map((r) => r.gameweek))).sort((a, b) => a - b);
+  const currentGameweek = gameweeks[0] ?? null;
+  const requested = params.gameweek ? Number(params.gameweek) : null;
+  const gameweek = requested !== null && gameweeks.includes(requested) ? requested : currentGameweek;
 
   type PlayerJoin = { full_name: string; position: string; ownership_pct: number | null; teams: { id: number; name: string; abbreviation: string; background_color: string; text_color: string } | null };
   type ProjectionRow = { total_points: number; rating: number | null; player_id: number; players: PlayerJoin };
@@ -28,7 +42,7 @@ export default async function BestSquadPage({ searchParams }: { searchParams: Pr
           supabase
             .from("projections")
             .select("total_points, rating, player_id, players!inner(full_name, position, ownership_pct, teams!team_id(id, name, abbreviation, background_color, text_color))")
-            .eq("horizon", horizon)
+            .eq("horizon", HORIZON)
             .eq("gameweek", gameweek)
             .eq("algorithm_version_id", latestVersionId)
             // Real bug found live while testing the page-load perf work: no
@@ -67,7 +81,7 @@ export default async function BestSquadPage({ searchParams }: { searchParams: Pr
     ? await supabase
         .from("club_projections")
         .select("total_points, team_id, teams!inner(id, name, abbreviation, background_color, text_color)")
-        .eq("horizon", horizon)
+        .eq("horizon", HORIZON)
         .eq("gameweek", gameweek)
         .eq("algorithm_version_id", latestClubVersionId)
     : { data: [] };
@@ -87,17 +101,21 @@ export default async function BestSquadPage({ searchParams }: { searchParams: Pr
         <h1 className="text-2xl font-semibold text-navy-100">HM Best Squad</h1>
         <p className="mt-1 max-w-2xl text-sm text-navy-300">
           The strongest real 7 players Fantasy EFL&rsquo;s own rules allow (any of the 3 real formations, max 2 per club) plus
-          your best 2 real club picks - no budget, no player prices, just the real numbers.
+          your best 2 real club picks - no budget, no player prices, just the real numbers. Every tab is that gameweek on its
+          own, not a running total - you rebuild your whole team each round anyway.
         </p>
 
-        <div className="mt-4 flex flex-wrap gap-1 text-xs">
-          {Object.entries(HORIZON_LABELS).map(([value, label]) => (
+        <div className="mt-4 flex flex-wrap gap-1.5 text-xs">
+          {gameweeks.map((gw) => (
             <Link
-              key={value}
-              href={`/best-squad?horizon=${value}`}
-              className={`rounded-md px-2 py-1 ${Number(value) === horizon ? "bg-navy-800 font-medium text-navy-100" : "text-navy-400 hover:text-navy-100"}`}
+              key={gw}
+              href={`/best-squad?gameweek=${gw}`}
+              className={`rounded-full px-4 py-1.5 font-[family-name:var(--font-cond)] text-sm font-bold uppercase tracking-wide ${
+                gw === gameweek ? "bg-sky-500 text-navy-950" : "bg-navy-900 text-navy-400 hover:bg-navy-800"
+              }`}
             >
-              {label}
+              GW{gw}
+              {gw === currentGameweek && <span className="ml-1.5 font-sans text-[10px] font-medium normal-case opacity-70">this week</span>}
             </Link>
           ))}
         </div>
@@ -123,7 +141,7 @@ export default async function BestSquadPage({ searchParams }: { searchParams: Pr
               <h2 className="font-[family-name:var(--font-cond)] text-lg font-extrabold uppercase tracking-wide text-navy-200">Your 2 club picks</h2>
               <p className="mt-1 text-xs text-navy-400">
                 Remember the real rule: you can only select an individual club a maximum of 5 times over the whole season - this
-                tool only ranks this gameweek&rsquo;s real projection, it doesn&rsquo;t track your own season history.
+                tool only ranks the selected gameweek&rsquo;s real projection, it doesn&rsquo;t track your own season history.
               </p>
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {bestClubs.map((c, i) => {

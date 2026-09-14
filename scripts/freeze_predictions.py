@@ -54,9 +54,25 @@ def main():
             select player_id, gameweek, total_points, rating
             from projections
             where horizon = 1 and algorithm_version_id = %s
+            -- Only the CURRENT gameweek, never a future one. Until
+            -- 2026-09-14 this clause didn't exist and didn't need to:
+            -- the engine only ever wrote one gameweek, so "horizon = 1"
+            -- unambiguously meant "this week". It now also writes
+            -- horizon=1 rows for the next two gameweeks (see
+            -- compute_player_projections.py's LOOKAHEAD constant), and
+            -- without this filter freezing would snapshot those too -
+            -- permanently recording a forecast made a week or two early
+            -- as if it were the real pre-kickoff prediction, with
+            -- `on conflict do nothing` guaranteeing the better, closer-in
+            -- projection could never replace it. Silent, and it would
+            -- have quietly poisoned every accuracy number from here on.
+            -- The minimum gameweek present IS the current one: the
+            -- engine's start_gameweeks list begins at
+            -- resolve_current_gameweek().
+              and gameweek = (select min(gameweek) from projections where algorithm_version_id = %s and horizon = 1)
             on conflict (player_id, gameweek) do nothing
             """,
-            (latest,),
+            (latest, latest),
         )
         frozen = cur.rowcount
         conn.commit()

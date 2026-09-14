@@ -38,6 +38,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from env_utils import db_connect  # noqa: E402
 
 HORIZONS = (1, 2, 3, 5)
+
+# Club picks are chosen fresh every gameweek exactly like players, so the
+# club engine anchors at the same start gameweeks the player engine does
+# - see compute_player_projections.py's PLAYER_LOOKAHEAD_GAMEWEEKS for
+# the full reasoning. Kept as its own constant rather than imported
+# across scripts, but the two must move together: the Best Squad page
+# reads a gameweek's players AND its club picks, and a gameweek present
+# in one table but not the other would render a half-empty squad.
+CLUB_LOOKAHEAD_GAMEWEEKS = 3
 SEASON_DISPLAY = "2026/27"
 SHRINKAGE_GAMES = 10.0
 RECENT_FORM_DECAY = 0.85
@@ -366,10 +375,15 @@ def main():
         )
         algorithm_version_id = cur.fetchone()[0]
 
+        # Earliest first - the first IS the real current gameweek, which
+        # freeze_club_predictions.py relies on.
+        start_gameweeks = [current_gameweek + offset for offset in range(CLUB_LOOKAHEAD_GAMEWEEKS)]
+        horizons_for = lambda start_gw: HORIZONS if start_gw == current_gameweek else (1,)
         window_fixtures_cache = {
-            (team_id, horizon): fetch_window_fixtures(cur, team_id, current_gameweek, horizon)
+            (team_id, start_gw, horizon): fetch_window_fixtures(cur, team_id, start_gw, horizon)
             for team_id in team_ids
-            for horizon in HORIZONS
+            for start_gw in start_gameweeks
+            for horizon in horizons_for(start_gw)
         }
 
         rows = []
@@ -396,14 +410,17 @@ def main():
 
             form_raw = compute_club_form_rate(round_results_map.get(team_id, {}), club_rules, current_gameweek, historical_prior)
 
-            for horizon in HORIZONS:
-                fixtures = window_fixtures_cache.get((team_id, horizon), [])
-                if not fixtures:
-                    no_fixtures += 1
-                    continue
-                per_stat, total_points = project_club_stats(team_id, fixtures, attack, defense, league_avg_goals, club_rules)
-                per_layer = project_club_layers(horizon, fixtures, team_fdr_map, team_names, form_raw, layer_weights.get(horizon, {}))
-                rows.append((team_id, current_gameweek, horizon, algorithm_version_id, round(total_points, 2), json.dumps(per_stat), json.dumps(per_layer)))
+            for start_gw in start_gameweeks:
+                for horizon in horizons_for(start_gw):
+                    fixtures = window_fixtures_cache.get((team_id, start_gw, horizon), [])
+                    # Real blank gameweek for this club - no row, rather than
+                    # a zero-point club pick that looks like a real option.
+                    if not fixtures:
+                        no_fixtures += 1
+                        continue
+                    per_stat, total_points = project_club_stats(team_id, fixtures, attack, defense, league_avg_goals, club_rules)
+                    per_layer = project_club_layers(horizon, fixtures, team_fdr_map, team_names, form_raw, layer_weights.get(horizon, {}))
+                    rows.append((team_id, start_gw, horizon, algorithm_version_id, round(total_points, 2), json.dumps(per_stat), json.dumps(per_layer)))
 
         execute_values(
             cur,
